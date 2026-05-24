@@ -1,0 +1,431 @@
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:equatable/equatable.dart';
+import '../../../../core/services/socket_service.dart';
+import '../../domain/entities/card_entity.dart';
+import '../../domain/entities/game_state_entity.dart';
+
+// ─── Events ───────────────────────────────────────────────────────────────────
+
+abstract class GameEvent extends Equatable {
+  @override List<Object?> get props => [];
+}
+
+class GameJoinRoom extends GameEvent {
+  final String roomId;
+  final int mySeat;
+  GameJoinRoom(this.roomId, this.mySeat);
+  @override List<Object?> get props => [roomId, mySeat];
+}
+
+class GameStarted extends GameEvent {
+  final Map<String, dynamic> data;
+  GameStarted(this.data);
+}
+
+class GameDealtCards extends GameEvent {
+  final List<CardEntity> hand;
+  final int seat;
+  GameDealtCards(this.hand, this.seat);
+}
+
+class GameBiddingStarted extends GameEvent {
+  final Map<String, dynamic> data;
+  GameBiddingStarted(this.data);
+}
+
+class GameBidPlaced extends GameEvent {
+  final int seat;
+  final int bid;
+  GameBidPlaced(this.seat, this.bid);
+}
+
+class GameCardPlayed extends GameEvent {
+  final int seat;
+  final CardEntity card;
+  GameCardPlayed(this.seat, this.card);
+}
+
+class GameTrickResult extends GameEvent {
+  final Map<String, dynamic> data;
+  GameTrickResult(this.data);
+}
+
+class GameRoundResult extends GameEvent {
+  final Map<String, dynamic> data;
+  GameRoundResult(this.data);
+}
+
+class GameResult extends GameEvent {
+  final Map<String, dynamic> data;
+  GameResult(this.data);
+}
+
+class GameStateUpdated extends GameEvent {
+  final Map<String, dynamic> data;
+  GameStateUpdated(this.data);
+}
+
+class GameStateSynced extends GameEvent {
+  final Map<String, dynamic> data;
+  GameStateSynced(this.data);
+}
+
+class GamePlaceBid extends GameEvent {
+  final int bid;
+  GamePlaceBid(this.bid);
+}
+
+class GamePlayCard extends GameEvent {
+  final CardEntity card;
+  GamePlayCard(this.card);
+}
+
+class GameNextRound extends GameEvent {}
+
+class GameErrorReceived extends GameEvent {
+  final String message;
+  GameErrorReceived(this.message);
+}
+
+class GameChatReceived extends GameEvent {
+  final String userId, username, message;
+  GameChatReceived(this.userId, this.username, this.message);
+}
+
+class GameEmojiReceived extends GameEvent {
+  final String userId, emoji;
+  GameEmojiReceived(this.userId, this.emoji);
+}
+
+class GameLeave extends GameEvent {}
+
+// ─── States ───────────────────────────────────────────────────────────────────
+
+abstract class GameState extends Equatable {
+  @override List<Object?> get props => [];
+}
+
+class GameInitial extends GameState {}
+
+class GameConnecting extends GameState {}
+
+class GameWaiting extends GameState {
+  final String roomId;
+  GameWaiting(this.roomId);
+  @override List<Object?> get props => [roomId];
+}
+
+class GameInProgress extends GameState {
+  final GameStateEntity state;
+  final List<ChatMessage> chatMessages;
+  final TrickResultData? lastTrickResult;
+  final RoundResultData? lastRoundResult;
+  final GameResultData? gameResult;
+
+  GameInProgress({
+    required this.state,
+    this.chatMessages = const [],
+    this.lastTrickResult,
+    this.lastRoundResult,
+    this.gameResult,
+  });
+
+  GameInProgress copyWithState(GameStateEntity s) => GameInProgress(
+    state: s, chatMessages: chatMessages,
+    lastTrickResult: lastTrickResult,
+    lastRoundResult: lastRoundResult,
+    gameResult: gameResult,
+  );
+
+  @override List<Object?> get props => [state, chatMessages, lastTrickResult, lastRoundResult, gameResult];
+}
+
+class GameErrorState extends GameState {
+  final String message;
+  GameErrorState(this.message);
+  @override List<Object?> get props => [message];
+}
+
+// ─── Helper data classes ──────────────────────────────────────────────────────
+
+class ChatMessage {
+  final String userId, username, message;
+  final int timestamp;
+  ChatMessage(this.userId, this.username, this.message, this.timestamp);
+}
+
+class TrickResultData {
+  final int winnerSeat;
+  final String ledSuit;
+  final Map<int, int> tricksWon;
+  TrickResultData(this.winnerSeat, this.ledSuit, this.tricksWon);
+}
+
+class RoundResultData {
+  final int round;
+  final List<dynamic> roundScores;
+  final Map<int, double> totalScores;
+  RoundResultData(this.round, this.roundScores, this.totalScores);
+}
+
+class GameResultData {
+  final int winnerSeat;
+  final String winnerName;
+  final Map<int, double> finalScores;
+  GameResultData(this.winnerSeat, this.winnerName, this.finalScores);
+}
+
+// ─── BLoC ─────────────────────────────────────────────────────────────────────
+
+class GameBloc extends Bloc<GameEvent, GameState> {
+  final SocketService _socket;
+  String? _roomId;
+  int _mySeat = 0;
+
+  GameBloc({SocketService? socket})
+      : _socket = socket ?? SocketService(),
+        super(GameInitial()) {
+    on<GameJoinRoom>(_onJoin);
+    on<GameStarted>(_onStarted);
+    on<GameDealtCards>(_onDealt);
+    on<GameBiddingStarted>(_onBidding);
+    on<GameBidPlaced>(_onBidPlaced);
+    on<GameCardPlayed>(_onCardPlayed);
+    on<GameTrickResult>(_onTrickResult);
+    on<GameRoundResult>(_onRoundResult);
+    on<GameResult>(_onGameResult);
+    on<GameStateUpdated>(_onStateUpdate);
+    on<GameStateSynced>(_onStateSync);
+    on<GamePlaceBid>(_onPlaceBid);
+    on<GamePlayCard>(_onPlayCard);
+    on<GameNextRound>(_onNextRound);
+    on<GameErrorReceived>(_onError);
+    on<GameChatReceived>(_onChat);
+    on<GameEmojiReceived>(_onEmoji);
+    on<GameLeave>(_onLeave);
+  }
+
+  void _registerSocketListeners() {
+    _socket.on('game_started',     (d) => add(GameStarted(Map<String, dynamic>.from(d as Map))));
+    _socket.on('deal_cards',       (d) {
+      final data = Map<String, dynamic>.from(d as Map);
+      final cards = (data['hand'] as List).map((c) =>
+          CardEntity.fromJson(Map<String, dynamic>.from(c as Map))).toList();
+      add(GameDealtCards(cards, (data['seat'] as num).toInt()));
+    });
+    _socket.on('bidding_started',  (d) => add(GameBiddingStarted(Map<String, dynamic>.from(d as Map))));
+    _socket.on('bid_placed',       (d) {
+      final data = Map<String, dynamic>.from(d as Map);
+      add(GameBidPlaced((data['seat'] as num).toInt(), (data['bid'] as num).toInt()));
+    });
+    _socket.on('card_played',      (d) {
+      final data = Map<String, dynamic>.from(d as Map);
+      add(GameCardPlayed(
+        (data['seat'] as num).toInt(),
+        CardEntity.fromJson(Map<String, dynamic>.from(data['card'] as Map)),
+      ));
+    });
+    _socket.on('trick_result',     (d) => add(GameTrickResult(Map<String, dynamic>.from(d as Map))));
+    _socket.on('round_result',     (d) => add(GameRoundResult(Map<String, dynamic>.from(d as Map))));
+    _socket.on('game_result',      (d) => add(GameResult(Map<String, dynamic>.from(d as Map))));
+    _socket.on('game_state_update',(d) => add(GameStateUpdated(Map<String, dynamic>.from(d as Map))));
+    _socket.on('game_state_sync',  (d) => add(GameStateSynced(Map<String, dynamic>.from(d as Map))));
+    _socket.on('error',            (d) => add(GameErrorReceived((d as Map)['message'] as String)));
+    _socket.on('chat_message',     (d) {
+      final data = Map<String, dynamic>.from(d as Map);
+      add(GameChatReceived(data['userId'] as String, data['username'] as String, data['message'] as String));
+    });
+    _socket.on('emoji_reaction',   (d) {
+      final data = Map<String, dynamic>.from(d as Map);
+      add(GameEmojiReceived(data['userId'] as String, data['emoji'] as String));
+    });
+  }
+
+  void _onJoin(GameJoinRoom event, Emitter<GameState> emit) {
+    _roomId  = event.roomId;
+    _mySeat  = event.mySeat;
+    _registerSocketListeners();
+    _socket.joinRoom(event.roomId);
+    emit(GameWaiting(event.roomId));
+  }
+
+  void _onStarted(GameStarted event, Emitter<GameState> emit) {
+    // Game started — wait for deal_cards and bidding_started
+  }
+
+  void _onDealt(GameDealtCards event, Emitter<GameState> emit) {
+    if (event.seat == _mySeat) {
+      if (state is GameInProgress) {
+        final current = (state as GameInProgress).state;
+        emit((state as GameInProgress).copyWithState(current.copyWith(hand: event.hand)));
+      }
+    }
+  }
+
+  void _onBidding(GameBiddingStarted event, Emitter<GameState> emit) {
+    final gs = GameStateEntity.fromJson({
+      'roomId':      _roomId,
+      'round':       event.data['round'],
+      'phase':       'bidding',
+      'dealer':      event.data['dealer'],
+      'bids':        {},
+      'tricksWon':   {},
+      'scores':      (state is GameInProgress) ? _rawScores((state as GameInProgress).state.scores) : {},
+      'currentTurn': event.data['currentTurn'],
+      'ledSuit':     null,
+      'currentTrick': [],
+      'players':     (state is GameInProgress) ? _rawPlayers((state as GameInProgress).state.players) : [],
+      'hand':        (state is GameInProgress) ? _rawHand((state as GameInProgress).state.hand) : [],
+    }, _mySeat);
+    emit(GameInProgress(state: gs));
+  }
+
+  void _onBidPlaced(GameBidPlaced event, Emitter<GameState> emit) {
+    if (state is! GameInProgress) return;
+    final s = (state as GameInProgress).state;
+    final newBids = Map<int, int>.from(s.bids)..[event.seat] = event.bid;
+    emit((state as GameInProgress).copyWithState(s.copyWith(bids: newBids)));
+  }
+
+  void _onCardPlayed(GameCardPlayed event, Emitter<GameState> emit) {
+    if (state is! GameInProgress) return;
+    final s = (state as GameInProgress).state;
+    final newHand = event.seat == _mySeat
+        ? s.hand.where((c) => c != event.card).toList()
+        : s.hand;
+    final newTrick = [...s.currentTrick, TrickPlay(seat: event.seat, card: event.card)];
+    emit((state as GameInProgress).copyWithState(s.copyWith(hand: newHand, currentTrick: newTrick)));
+  }
+
+  void _onTrickResult(GameTrickResult event, Emitter<GameState> emit) {
+    if (state is! GameInProgress) return;
+    final d = event.data;
+    final rawTricks = (d['tricksWon'] as Map<String, dynamic>?) ?? {};
+    final tricks = rawTricks.map((k, v) => MapEntry(int.parse(k), (v as num).toInt()));
+    final tr = TrickResultData(
+      (d['winnerSeat'] as num).toInt(),
+      d['ledSuit'] as String? ?? '',
+      tricks,
+    );
+    final s = (state as GameInProgress).state;
+    emit(GameInProgress(
+      state: s.copyWith(tricksWon: tricks, currentTrick: []),
+      chatMessages: (state as GameInProgress).chatMessages,
+      lastTrickResult: tr,
+    ));
+  }
+
+  void _onRoundResult(GameRoundResult event, Emitter<GameState> emit) {
+    if (state is! GameInProgress) return;
+    final d = event.data;
+    final rawScores = (d['totalScores'] as Map<String, dynamic>?) ?? {};
+    final scores = rawScores.map((k, v) => MapEntry(int.parse(k), (v as num).toDouble()));
+    final rr = RoundResultData(
+      (d['round'] as num).toInt(),
+      d['roundScores'] as List<dynamic>? ?? [],
+      scores,
+    );
+    final s = (state as GameInProgress).state;
+    emit(GameInProgress(
+      state: s.copyWith(scores: scores, phase: 'round_end'),
+      chatMessages: (state as GameInProgress).chatMessages,
+      lastRoundResult: rr,
+    ));
+  }
+
+  void _onGameResult(GameResult event, Emitter<GameState> emit) {
+    if (state is! GameInProgress) return;
+    final d = event.data;
+    final rawScores = (d['finalScores'] as Map<String, dynamic>?) ?? {};
+    final scores = rawScores.map((k, v) => MapEntry(int.parse(k), (v as num).toDouble()));
+    final gr = GameResultData(
+      (d['winnerSeat'] as num).toInt(),
+      d['winnerName'] as String? ?? '',
+      scores,
+    );
+    final s = (state as GameInProgress).state;
+    emit(GameInProgress(
+      state: s.copyWith(phase: 'game_end', scores: scores),
+      chatMessages: (state as GameInProgress).chatMessages,
+      gameResult: gr,
+    ));
+  }
+
+  void _onStateUpdate(GameStateUpdated event, Emitter<GameState> emit) {
+    if (state is! GameInProgress) return;
+    final d = event.data;
+    final s = (state as GameInProgress).state;
+    final rawTricks = (d['tricksWon'] as Map<String, dynamic>?) ?? {};
+    final tricks = rawTricks.isEmpty ? s.tricksWon
+        : rawTricks.map((k, v) => MapEntry(int.parse(k), (v as num).toInt()));
+    final rawTrick = (d['currentTrick'] as List<dynamic>?) ?? [];
+    final currentTrick = rawTrick.isEmpty ? s.currentTrick
+        : rawTrick.map((e) => TrickPlay.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+    emit((state as GameInProgress).copyWithState(s.copyWith(
+      phase:        d['phase'] as String? ?? s.phase,
+      currentTurn:  (d['currentTurn'] as num?)?.toInt() ?? s.currentTurn,
+      tricksWon:    tricks,
+      currentTrick: currentTrick,
+      ledSuit:      d['ledSuit'] as String?,
+    )));
+  }
+
+  void _onStateSync(GameStateSynced event, Emitter<GameState> emit) {
+    final gs = GameStateEntity.fromJson(event.data, _mySeat);
+    emit(GameInProgress(state: gs));
+  }
+
+  void _onPlaceBid(GamePlaceBid event, Emitter<GameState> emit) {
+    if (_roomId == null) return;
+    _socket.placeBid(_roomId!, event.bid);
+  }
+
+  void _onPlayCard(GamePlayCard event, Emitter<GameState> emit) {
+    if (_roomId == null) return;
+    _socket.playCard(_roomId!, event.card.toJson().map((k, v) => MapEntry(k, v.toString())));
+  }
+
+  void _onNextRound(GameNextRound event, Emitter<GameState> emit) {
+    if (_roomId == null) return;
+    _socket.nextRound(_roomId!);
+  }
+
+  void _onError(GameErrorReceived event, Emitter<GameState> emit) {
+    emit(GameErrorState(event.message));
+  }
+
+  void _onChat(GameChatReceived event, Emitter<GameState> emit) {
+    if (state is! GameInProgress) return;
+    final current = state as GameInProgress;
+    final msgs = [...current.chatMessages,
+      ChatMessage(event.userId, event.username, event.message, DateTime.now().millisecondsSinceEpoch)];
+    emit(GameInProgress(
+      state: current.state, chatMessages: msgs,
+      lastTrickResult: current.lastTrickResult,
+      lastRoundResult: current.lastRoundResult,
+      gameResult: current.gameResult,
+    ));
+  }
+
+  void _onEmoji(GameEmojiReceived event, Emitter<GameState> emit) {}
+
+  void _onLeave(GameLeave event, Emitter<GameState> emit) {
+    if (_roomId != null) _socket.off('game_started');
+    _socket.disconnect();
+    emit(GameInitial());
+  }
+
+  // ─── Helpers ────────────────────────────────────────────────────────────────
+
+  Map<String, dynamic> _rawScores(Map<int, double> scores) =>
+      scores.map((k, v) => MapEntry(k.toString(), v));
+
+  List<Map<String, dynamic>> _rawPlayers(List<PlayerInfo> players) =>
+      players.map((p) => {
+        'seat': p.seat, 'user_id': p.userId, 'username': p.username,
+        'avatar': p.avatar, 'is_bot': p.isBot, 'bot_level': p.botLevel,
+      }).toList();
+
+  List<Map<String, dynamic>> _rawHand(List<CardEntity> hand) =>
+      hand.map((c) => c.toJson()).toList();
+}
