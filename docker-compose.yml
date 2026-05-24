@@ -1,0 +1,186 @@
+version: '3.9'
+
+services:
+  # ─── Databases ───────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: rummy_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: rummyroyale
+      POSTGRES_USER: rummy_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-rummy_dev_pass}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/db/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./scripts/db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rummy_user -d rummyroyale"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: rummy_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-rummy_redis_pass}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-rummy_redis_pass}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Backend Services ─────────────────────────────────────────────────────────
+  api-gateway:
+    build:
+      context: ./backend
+      dockerfile: ../infrastructure/docker/api-gateway.Dockerfile
+    container_name: rummy_api_gateway
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_in_prod_min_32_chars}
+      AUTH_SERVICE_URL: http://auth-service:3001
+      GAME_SERVICE_URL: http://game-service:3002
+      WALLET_SERVICE_URL: http://wallet-service:3003
+      MATCHMAKING_SERVICE_URL: http://matchmaking-service:3004
+    depends_on:
+      - auth-service
+    networks:
+      - rummy_net
+
+  auth-service:
+    build:
+      context: ./backend
+      dockerfile: ../infrastructure/docker/auth-service.Dockerfile
+    container_name: rummy_auth_service
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: rummy_user
+      DB_PASSWORD: ${DB_PASSWORD:-rummy_dev_pass}
+      DB_NAME: rummyroyale
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-rummy_redis_pass}
+      JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_in_prod_min_32_chars}
+      JWT_EXPIRES_IN: 900
+      REFRESH_TOKEN_EXPIRES_IN: 2592000
+      OTP_TTL_SECONDS: 300
+      APP_VERSION: 1.0.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - rummy_net
+
+  game-service:
+    build:
+      context: ./backend
+      dockerfile: ../infrastructure/docker/game-service.Dockerfile
+    container_name: rummy_game_service
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    environment:
+      NODE_ENV: development
+      PORT: 3002
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: rummy_user
+      DB_PASSWORD: ${DB_PASSWORD:-rummy_dev_pass}
+      DB_NAME: rummyroyale
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-rummy_redis_pass}
+      JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_in_prod_min_32_chars}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - rummy_net
+
+  wallet-service:
+    build:
+      context: ./backend
+      dockerfile: ../infrastructure/docker/wallet-service.Dockerfile
+    container_name: rummy_wallet_service
+    restart: unless-stopped
+    ports:
+      - "3003:3003"
+    environment:
+      NODE_ENV: development
+      PORT: 3003
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: rummy_user
+      DB_PASSWORD: ${DB_PASSWORD:-rummy_dev_pass}
+      DB_NAME: rummyroyale
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-rummy_redis_pass}
+      JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_in_prod_min_32_chars}
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - rummy_net
+
+  matchmaking-service:
+    build:
+      context: ./backend
+      dockerfile: ../infrastructure/docker/matchmaking-service.Dockerfile
+    container_name: rummy_matchmaking_service
+    restart: unless-stopped
+    ports:
+      - "3004:3004"
+    environment:
+      NODE_ENV: development
+      PORT: 3004
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: rummy_user
+      DB_PASSWORD: ${DB_PASSWORD:-rummy_dev_pass}
+      DB_NAME: rummyroyale
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-rummy_redis_pass}
+      JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_in_prod_min_32_chars}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - rummy_net
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  rummy_net:
+    driver: bridge

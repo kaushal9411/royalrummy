@@ -1,0 +1,197 @@
+version: '3.9'
+
+services:
+  # ── PostgreSQL ───────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: rummy_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: rummyroyale
+      POSTGRES_USER: rummy_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../../scripts/db/001_initial_schema.sql:/docker-entrypoint-initdb.d/001_schema.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rummy_user -d rummyroyale"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: rummy_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-secret} --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-secret}", "ping"]
+      interval: 10s
+
+  # ── API Gateway ──────────────────────────────────────────────────────────────
+  api-gateway:
+    build:
+      context: ../../backend
+      dockerfile: ../infrastructure/docker/Dockerfile
+      args:
+        SERVICE: api-gateway
+    container_name: rummy_api_gateway
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      SERVICE_NAME: api-gateway
+      API_GATEWAY_PORT: 3000
+      AUTH_SERVICE_URL: http://auth-service:3001
+      GAME_SERVICE_URL: http://game-service:3002
+      WALLET_SERVICE_URL: http://wallet-service:3003
+      MATCHMAKING_SERVICE_URL: http://matchmaking-service:3004
+      TOURNAMENT_SERVICE_URL: http://tournament-service:3005
+      NOTIFICATION_SERVICE_URL: http://notification-service:3006
+      ALLOWED_ORIGINS: http://localhost:3100,http://localhost:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../../backend:/app
+      - /app/node_modules
+
+  # ── Auth Service ─────────────────────────────────────────────────────────────
+  auth-service:
+    build:
+      context: ../../backend
+      dockerfile: ../infrastructure/docker/Dockerfile
+      args:
+        SERVICE: auth-service
+    container_name: rummy_auth
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: development
+      SERVICE_NAME: auth-service
+      AUTH_SERVICE_PORT: 3001
+      DATABASE_URL: postgresql://rummy_user:${DB_PASSWORD:-secret}@postgres:5432/rummyroyale
+      REDIS_URL: redis://:${REDIS_PASSWORD:-secret}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-dev-refresh-secret}
+      SIGNUP_BONUS: 50
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── Game Service ─────────────────────────────────────────────────────────────
+  game-service:
+    build:
+      context: ../../backend
+      dockerfile: ../infrastructure/docker/Dockerfile
+      args:
+        SERVICE: game-service
+    container_name: rummy_game
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    environment:
+      NODE_ENV: development
+      SERVICE_NAME: game-service
+      GAME_SERVICE_PORT: 3002
+      DATABASE_URL: postgresql://rummy_user:${DB_PASSWORD:-secret}@postgres:5432/rummyroyale
+      REDIS_URL: redis://:${REDIS_PASSWORD:-secret}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      GAME_HAND_ENCRYPTION_KEY: ${GAME_HAND_ENCRYPTION_KEY:-dev-encryption-key-32chars!!}
+    depends_on:
+      - postgres
+      - redis
+
+  # ── Wallet Service ───────────────────────────────────────────────────────────
+  wallet-service:
+    build:
+      context: ../../backend
+      dockerfile: ../infrastructure/docker/Dockerfile
+      args:
+        SERVICE: wallet-service
+    container_name: rummy_wallet
+    restart: unless-stopped
+    ports:
+      - "3003:3003"
+    environment:
+      NODE_ENV: development
+      SERVICE_NAME: wallet-service
+      WALLET_SERVICE_PORT: 3003
+      DATABASE_URL: postgresql://rummy_user:${DB_PASSWORD:-secret}@postgres:5432/rummyroyale
+      REDIS_URL: redis://:${REDIS_PASSWORD:-secret}@redis:6379
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-rzp_test_xxx}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-xxx}
+    depends_on:
+      - postgres
+      - redis
+
+  # ── Admin Panel (Next.js) ────────────────────────────────────────────────────
+  admin:
+    build:
+      context: ../../admin
+      dockerfile: ../infrastructure/docker/Dockerfile.admin
+    container_name: rummy_admin
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:3000/v1
+    depends_on:
+      - api-gateway
+
+  # ── NGINX Reverse Proxy ──────────────────────────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: rummy_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ../nginx/nginx.dev.conf:/etc/nginx/nginx.conf:ro
+      - ../nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - api-gateway
+      - game-service
+      - admin
+
+  # ── Monitoring ───────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: rummy_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: rummy_grafana
+    ports:
+      - "3200:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+
+volumes:
+  postgres_data:
+  redis_data:
+  grafana_data:
+
+networks:
+  default:
+    name: rummy_network
