@@ -341,6 +341,21 @@ class GameEngine {
     return { is_valid: true, gameOverPayload, scores, winner_id: userId, prize: netPrize };
   }
 
+  // ── Create Private Table ───────────────────────────────────────────────────
+  async createPrivateTable(userId, options = {}) {
+    const { game_type = 'points', max_players = 6, entry_fee = 0 } = options;
+    const { generateTableCode } = require('../../../../libs/utils/helpers');
+    const tableId = require('uuid').v4();
+    const tableCode = generateTableCode();
+
+    await this.db.query(`
+      INSERT INTO game_tables (id, game_type, max_players, min_players, entry_fee, status, is_private, table_code)
+      VALUES ($1, $2, $3, 2, $4, 'waiting', true, $5)
+    `, [tableId, game_type, max_players, entry_fee, tableCode]);
+
+    return { table_id: tableId, table_code: tableCode, game_type, max_players, entry_fee };
+  }
+
   // ── Drop Game ──────────────────────────────────────────────────────────────
   async dropGame(userId, tableId) {
     const state = await this._getState(tableId);

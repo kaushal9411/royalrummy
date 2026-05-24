@@ -257,16 +257,219 @@ app.get('/v1/auth/me', require('../../../libs/middleware/auth.middleware').authe
   sendResponse(res, 200, user.rows[0]);
 });
 
+// POST /v1/auth/login (password-based — for users who set a password)
+app.post('/v1/auth/login',
+  [
+    body('phone').optional().matches(/^\+91[6-9]\d{9}$/),
+    body('email').optional().isEmail(),
+    body('password').isLength({ min: 6 }),
+    body('device_id').notEmpty(),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return sendError(res, 400, 'AUTH_VALIDATION', 'Invalid input');
+
+    const { phone, email, password, device_id, fcm_token } = req.body;
+    const identifier = phone || email;
+    if (!identifier) return sendError(res, 400, 'AUTH_VALIDATION', 'Phone or email required');
+
+    const field = phone ? 'phone' : 'email';
+    const result = await db.query(
+      `SELECT id, password_hash, status, username, role FROM users WHERE ${field} = $1 AND deleted_at IS NULL`,
+      [identifier]
+    );
+
+    if (result.rows.length === 0) return sendError(res, 401, 'AUTH_001', 'Invalid credentials');
+
+    const user = result.rows[0];
+    if (user.status === 'banned') return sendError(res, 403, 'AUTH_004', 'Account banned');
+    if (user.status === 'suspended') return sendError(res, 403, 'AUTH_004', 'Account suspended');
+
+    if (!user.password_hash) {
+      return sendError(res, 400, 'AUTH_NO_PASSWORD', 'Account uses OTP login. Please use /auth/otp/send');
+    }
+
+    const valid = await bcrypt.compare(password, user.password_hash);
+    if (!valid) return sendError(res, 401, 'AUTH_001', 'Invalid credentials');
+
+    // Update last login + device
+    await db.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
+    if (device_id) {
+      await db.query(`
+        INSERT INTO user_devices (id, user_id, device_id, fcm_token, is_trusted)
+        VALUES ($1, $2, $3, $4, true)
+        ON CONFLICT (user_id, device_id) DO UPDATE SET fcm_token = $4, last_active_at = NOW()
+      `, [uuidv4(), user.id, device_id, fcm_token]);
+    }
+
+    const tokens = await issueTokens(user.id, device_id, user.role);
+    sendResponse(res, 200, {
+      user: { id: user.id, username: user.username, role: user.role },
+      ...tokens,
+    });
+  }
+);
+
+// POST /v1/auth/logout/all
+app.post('/v1/auth/logout/all', require('../../../libs/middleware/auth.middleware').authenticateJWT, async (req, res) => {
+  await db.query(
+    'UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL',
+    [req.user.id]
+  );
+  sendResponse(res, 200, { message: 'Logged out from all devices' });
+});
+
+// PATCH /v1/auth/profile
+app.patch('/v1/auth/profile', require('../../../libs/middleware/auth.middleware').authenticateJWT,
+  [
+    body('full_name').optional().isLength({ min: 2, max: 100 }),
+    body('avatar_url').optional().isURL(),
+    body('bio').optional().isLength({ max: 500 }),
+    body('date_of_birth').optional().isDate(),
+    body('gender').optional().isIn(['male', 'female', 'other']),
+    body('city').optional().isLength({ max: 100 }),
+    body('state').optional().isLength({ max: 100 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return sendError(res, 400, 'GENERAL_002', 'Validation failed', errors.array());
+
+    const { full_name, avatar_url, bio, date_of_birth, gender, city, state } = req.body;
+    const fields = [];
+    const values = [];
+
+    if (full_name !== undefined) { fields.push(`full_name = $${fields.length + 1}`); values.push(full_name); }
+    if (avatar_url !== undefined) { fields.push(`avatar_url = $${fields.length + 1}`); values.push(avatar_url); }
+    if (bio !== undefined) { fields.push(`bio = $${fields.length + 1}`); values.push(bio); }
+    if (date_of_birth !== undefined) { fields.push(`date_of_birth = $${fields.length + 1}`); values.push(date_of_birth); }
+    if (gender !== undefined) { fields.push(`gender = $${fields.length + 1}`); values.push(gender); }
+    if (city !== undefined) { fields.push(`city = $${fields.length + 1}`); values.push(city); }
+    if (state !== undefined) { fields.push(`state = $${fields.length + 1}`); values.push(state); }
+
+    if (fields.length === 0) return sendError(res, 400, 'GENERAL_002', 'No fields to update');
+
+    values.push(req.user.id);
+    await db.query(
+      `UPDATE user_profiles SET ${fields.join(', ')}, updated_at = NOW() WHERE user_id = $${values.length}`,
+      values
+    );
+
+    sendResponse(res, 200, { message: 'Profile updated' });
+  }
+);
+
+// POST /v1/auth/change-password
+app.post('/v1/auth/change-password', require('../../../libs/middleware/auth.middleware').authenticateJWT,
+  [
+    body('current_password').optional().isLength({ min: 6 }),
+    body('new_password').isLength({ min: 8 }).matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return sendError(res, 400, 'GENERAL_002', 'Password must be 8+ chars with uppercase, lowercase, and number');
+    }
+
+    const { current_password, new_password } = req.body;
+    const result = await db.query('SELECT password_hash FROM users WHERE id = $1', [req.user.id]);
+    const user = result.rows[0];
+
+    // If user already has a password, verify current
+    if (user.password_hash && current_password) {
+      const valid = await bcrypt.compare(current_password, user.password_hash);
+      if (!valid) return sendError(res, 400, 'AUTH_001', 'Current password is incorrect');
+    }
+
+    const hash = await bcrypt.hash(new_password, 12);
+    await db.query('UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2', [hash, req.user.id]);
+
+    sendResponse(res, 200, { message: 'Password updated successfully' });
+  }
+);
+
+// DELETE /v1/auth/account
+app.delete('/v1/auth/account', require('../../../libs/middleware/auth.middleware').authenticateJWT, async (req, res) => {
+  // Soft delete: set deleted_at and update status
+  await db.query(
+    "UPDATE users SET deleted_at = NOW(), status = 'banned', updated_at = NOW() WHERE id = $1",
+    [req.user.id]
+  );
+  // Revoke all tokens
+  await db.query('UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1', [req.user.id]);
+  sendResponse(res, 200, { message: 'Account deleted' });
+});
+
+// POST /v1/auth/kyc/submit
+app.post('/v1/auth/kyc/submit', require('../../../libs/middleware/auth.middleware').authenticateJWT,
+  [
+    body('doc_type').isIn(['aadhaar', 'pan', 'passport', 'driving_license']),
+    body('doc_number').notEmpty().isLength({ min: 5, max: 30 }),
+    body('doc_front_url').isURL(),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return sendError(res, 400, 'GENERAL_002', 'Validation failed', errors.array());
+
+    const { doc_type, doc_number, doc_front_url, doc_back_url, selfie_url } = req.body;
+
+    // Check for existing pending/approved KYC
+    const existing = await db.query(
+      "SELECT id, status FROM kyc_documents WHERE user_id = $1 AND status NOT IN ('rejected')",
+      [req.user.id]
+    );
+    if (existing.rows.length > 0) {
+      return sendError(res, 409, 'KYC_ALREADY_SUBMITTED', `KYC already ${existing.rows[0].status}`);
+    }
+
+    await db.query(`
+      INSERT INTO kyc_documents (id, user_id, doc_type, doc_number, doc_front_url, doc_back_url, selfie_url, status)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
+    `, [uuidv4(), req.user.id, doc_type, doc_number, doc_front_url, doc_back_url || null, selfie_url || null]);
+
+    // Update user kyc_status
+    await db.query(
+      "UPDATE users SET kyc_status = 'pending', updated_at = NOW() WHERE id = $1",
+      [req.user.id]
+    );
+
+    sendResponse(res, 201, { message: 'KYC documents submitted successfully. Under review.' });
+  }
+);
+
+// GET /v1/auth/kyc/status
+app.get('/v1/auth/kyc/status', require('../../../libs/middleware/auth.middleware').authenticateJWT, async (req, res) => {
+  const result = await db.query(
+    `SELECT doc_type, status, rejection_reason, submitted_at, reviewed_at
+     FROM kyc_documents WHERE user_id = $1
+     ORDER BY submitted_at DESC LIMIT 1`,
+    [req.user.id]
+  );
+
+  const user = await db.query(
+    'SELECT kyc_status FROM users WHERE id = $1',
+    [req.user.id]
+  );
+
+  sendResponse(res, 200, {
+    kyc_status: user.rows[0]?.kyc_status || 'pending',
+    latest_submission: result.rows[0] || null,
+  });
+});
+
 // Helper: issue JWT pair
-async function issueTokens(userId, deviceId) {
+async function issueTokens(userId, deviceId, role = 'player') {
+  const userRow = await db.query('SELECT username FROM users WHERE id = $1', [userId]);
+  const username = userRow.rows[0]?.username || '';
+  const jti = uuidv4();
+
   const accessToken = jwt.sign(
-    { sub: userId, device_id: deviceId },
+    { sub: userId, username, role, device_id: deviceId, jti },
     process.env.JWT_SECRET,
     { expiresIn: '15m' }
   );
 
   const refreshToken = jwt.sign(
-    { sub: userId, device_id: deviceId },
+    { sub: userId, username, role, device_id: deviceId },
     process.env.JWT_REFRESH_SECRET,
     { expiresIn: '30d' }
   );
