@@ -105,6 +105,8 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
                                     const SizedBox(height: 16),
                                     _buildStats(),
                                     const SizedBox(height: 16),
+                                    _buildWallet(),
+                                    const SizedBox(height: 16),
                                     _buildHistory(),
                                     const SizedBox(height: 24),
                                   ],
@@ -434,6 +436,149 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
     );
   }
 
+  Widget _buildWallet() {
+    final coins   = _n(_profile!['coins']).toInt();
+    final balance = coins / 10.0;
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF0E1A2E), Color(0xFF0A1422)],
+        ),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
+        boxShadow: [BoxShadow(color: AppColors.primary.withValues(alpha: 0.08),
+            blurRadius: 16, offset: const Offset(0, 4))],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(Icons.account_balance_wallet_rounded,
+                    color: AppColors.primary, size: 18),
+              ),
+              const SizedBox(width: 12),
+              const Text('Wallet',
+                  style: TextStyle(color: AppColors.textPrimary,
+                      fontWeight: FontWeight.bold, fontSize: 17)),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.monetization_on_rounded,
+                      color: AppColors.primary, size: 13),
+                  const SizedBox(width: 5),
+                  Text('$coins',
+                      style: const TextStyle(color: AppColors.primary,
+                          fontWeight: FontWeight.bold, fontSize: 13)),
+                ]),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          // Balance card
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  AppColors.primary.withValues(alpha: 0.14),
+                  AppColors.primary.withValues(alpha: 0.05),
+                ],
+              ),
+              border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
+            ),
+            child: Row(
+              children: [
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('Available Balance',
+                      style: TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+                  const SizedBox(height: 4),
+                  TweenAnimationBuilder<double>(
+                    tween: Tween(begin: 0, end: balance),
+                    duration: const Duration(milliseconds: 900),
+                    curve: Curves.easeOut,
+                    builder: (_, v, __) => Text(
+                      '₹${v.toStringAsFixed(2)}',
+                      style: const TextStyle(
+                        color: AppColors.primary,
+                        fontSize: 28, fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                ]),
+                const Spacer(),
+                const Text('💰', style: TextStyle(fontSize: 34)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+
+          // Add / Withdraw buttons
+          Row(children: [
+            Expanded(child: _WalletBtn(
+              label: 'Add Money',
+              icon: Icons.arrow_downward_rounded,
+              colors: const [Color(0xFF00E676), Color(0xFF00C853), Color(0xFF007E33)],
+              onTap: () => context.push('/add-money'),
+            )),
+            const SizedBox(width: 12),
+            Expanded(child: _WalletBtn(
+              label: 'Withdraw',
+              icon: Icons.arrow_upward_rounded,
+              colors: const [AppColors.accent, AppColors.accentDark],
+              onTap: () => context.push('/withdraw'),
+            )),
+          ]),
+          const SizedBox(height: 10),
+
+          // History button
+          GestureDetector(
+            onTap: () => context.push('/wallet'),
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 13),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                color: AppColors.darkCard,
+                border: Border.all(color: AppColors.darkBorder),
+              ),
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.history_rounded, color: AppColors.textSecondary, size: 16),
+                  SizedBox(width: 8),
+                  Text('Transaction History',
+                      style: TextStyle(color: AppColors.textPrimary,
+                          fontWeight: FontWeight.w600, fontSize: 13)),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _statRow(IconData icon, String label, String value, Color color) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 7),
     child: Row(
@@ -720,6 +865,63 @@ class _StatChip extends StatelessWidget {
         Text(label,
             style: const TextStyle(color: AppColors.textSecondary, fontSize: 10)),
       ],
+    ),
+  );
+}
+
+// ── Wallet action button ───────────────────────────────────────────────────────
+class _WalletBtn extends StatefulWidget {
+  final String label;
+  final IconData icon;
+  final List<Color> colors;
+  final VoidCallback onTap;
+  const _WalletBtn({required this.label, required this.icon, required this.colors, required this.onTap});
+  @override
+  State<_WalletBtn> createState() => _WalletBtnState();
+}
+
+class _WalletBtnState extends State<_WalletBtn> with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _scale;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl  = AnimationController(vsync: this, duration: const Duration(milliseconds: 100));
+    _scale = Tween(begin: 1.0, end: 0.95).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+  }
+
+  @override
+  void dispose() { _ctrl.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    onTapDown:   (_) => _ctrl.forward(),
+    onTapUp:     (_) { _ctrl.reverse(); widget.onTap(); },
+    onTapCancel: ()  => _ctrl.reverse(),
+    child: ScaleTransition(
+      scale: _scale,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(14),
+          gradient: LinearGradient(colors: widget.colors),
+          boxShadow: [BoxShadow(
+            color: widget.colors[0].withValues(alpha: 0.35),
+            blurRadius: 10, offset: const Offset(0, 4),
+          )],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(widget.icon, color: Colors.white, size: 17),
+            const SizedBox(width: 7),
+            Text(widget.label,
+                style: const TextStyle(color: Colors.white,
+                    fontWeight: FontWeight.bold, fontSize: 14)),
+          ],
+        ),
+      ),
     ),
   );
 }

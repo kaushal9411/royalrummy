@@ -82,3 +82,49 @@ export interface Analytics {
   registrationsByDay: { date: string; users: number }[];
   topPlayers:         { username: string; matches_won: number; total_score: number }[];
 }
+
+// ─── Payment types & calls ────────────────────────────────────────────────────
+
+export interface PaymentStats {
+  total_revenue:   number;
+  total_withdrawn: number;
+  pending_amount:  number;
+  pending_count:   number;
+  total_add_count: number;
+  today_revenue:   number;
+}
+
+export interface AdminTransaction {
+  id: string; user_id: string; username: string; email: string;
+  amount: number; coins: number; type: string; status: string;
+  created_at: string; updated_at: string;
+}
+
+export const getPaymentStats = async (): Promise<PaymentStats> => {
+  const res = await api.get('/payments/admin/stats');
+  return res.data;
+};
+
+export const getAdminTransactions = async (params?: {
+  userId?: string; limit?: number; offset?: number;
+}): Promise<AdminTransaction[]> => {
+  const res = await api.get('/payments/admin/transactions', { params });
+  return res.data;
+};
+
+export const getAdminWithdrawals = async (params?: {
+  status?: string; limit?: number; offset?: number;
+}): Promise<AdminTransaction[]> => {
+  const res = await api.get('/payments/admin/withdrawals', { params });
+  return res.data;
+};
+
+export const approveWithdrawal = async (id: string) => {
+  const res = await api.patch(`/payments/admin/withdrawals/${id}/approve`);
+  return res.data;
+};
+
+export const rejectWithdrawal = async (id: string, reason: string) => {
+  const res = await api.patch(`/payments/admin/withdrawals/${id}/reject`, { reason });
+  return res.data;
+};

@@ -21,6 +21,7 @@
         "intl",
         "json_annotation",
         "lottie",
+        "razorpay_flutter",
         "shimmer",
         "socket_io_client",
         "uuid"
@@ -140,6 +141,14 @@
         "stream_channel",
         "test_api",
         "vector_math"
+      ]
+    },
+    {
+      "name": "razorpay_flutter",
+      "version": "1.4.5",
+      "dependencies": [
+        "eventify",
+        "flutter"
       ]
     },
     {
@@ -719,6 +728,11 @@
         "string_scanner",
         "term_glyph"
       ]
+    },
+    {
+      "name": "eventify",
+      "version": "1.0.1",
+      "dependencies": []
     },
     {
       "name": "google_sign_in_web",

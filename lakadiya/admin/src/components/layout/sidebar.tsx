@@ -7,6 +7,7 @@ const NAV = [
   { href: '/dashboard', label: 'Dashboard',   icon: '📊', color: 'from-emerald-500/20 to-green-600/10',  active: 'border-emerald-500/50 text-emerald-400' },
   { href: '/users',     label: 'Users',        icon: '👥', color: 'from-blue-500/20 to-indigo-600/10',    active: 'border-blue-500/50 text-blue-400' },
   { href: '/matches',   label: 'Matches',      icon: '🃏', color: 'from-amber-500/20 to-orange-600/10',   active: 'border-amber-500/50 text-amber-400' },
+  { href: '/payments',  label: 'Payments',     icon: '💰', color: 'from-green-500/20 to-emerald-600/10',  active: 'border-green-500/50 text-green-400' },
   { href: '/analytics', label: 'Analytics',    icon: '📈', color: 'from-purple-500/20 to-violet-600/10',  active: 'border-purple-500/50 text-purple-400' },
 ];
 

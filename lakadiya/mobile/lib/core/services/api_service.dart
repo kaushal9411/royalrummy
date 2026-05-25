@@ -12,33 +12,52 @@ class ApiService {
   void init() {
     _dio = Dio(BaseOptions(
       baseUrl: '${AppConstants.baseUrl}${AppConstants.apiVersion}',
-      connectTimeout: const Duration(seconds: 10),
-      receiveTimeout: const Duration(seconds: 15),
-      headers: {'Content-Type': 'application/json'},
+      connectTimeout: const Duration(seconds: 30),
+      receiveTimeout: const Duration(seconds: 30),
+      sendTimeout: const Duration(seconds: 30),
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      validateStatus: (status) => status != null && status < 500,
     ));
 
     _dio.interceptors.add(InterceptorsWrapper(
       onRequest: (options, handler) {
         final token = StorageService.getToken();
-        if (token != null) {
+        if (token != null && token.isNotEmpty) {
           options.headers['Authorization'] = 'Bearer $token';
         }
+        print('[API] ${options.method} ${options.path}');
         handler.next(options);
       },
+      onResponse: (response, handler) {
+        print('[API] Response: ${response.statusCode} - ${response.data}');
+        handler.next(response);
+      },
       onError: (error, handler) {
+        print('[API] Error: ${error.type} - ${error.message}');
+        print('[API] Response: ${error.response?.data}');
         handler.next(error);
       },
     ));
   }
 
-  Future<Response> get(String path, {Map<String, dynamic>? params}) =>
-      _dio.get(path, queryParameters: params);
+  Dio get dio => _dio;
 
-  Future<Response> post(String path, {dynamic data}) =>
-      _dio.post(path, data: data);
+  Future<Response> get(String path, {Map<String, dynamic>? params}) {
+    return _dio.get(path, queryParameters: params);
+  }
 
-  Future<Response> patch(String path, {dynamic data}) =>
-      _dio.patch(path, data: data);
+  Future<Response> post(String path, {dynamic data}) {
+    return _dio.post(path, data: data);
+  }
 
-  Future<Response> delete(String path) => _dio.delete(path);
+  Future<Response> patch(String path, {dynamic data}) {
+    return _dio.patch(path, data: data);
+  }
+
+  Future<Response> delete(String path) {
+    return _dio.delete(path);
+  }
 }
