@@ -171,4 +171,11 @@ const getPublicRooms = async () => {
   return result.rows;
 };
 
-module.exports = { createRoom, joinRoom, getRoomDetails, leaveRoom, addBot, getPublicRooms };
+const resetBet = async (hostId, roomId) => {
+  const room = await query('SELECT host_id FROM rooms WHERE id = $1', [roomId]);
+  if (!room.rows.length) throw { status: 404, message: 'Room not found' };
+  if (room.rows[0].host_id !== hostId) throw { status: 403, message: 'Only host can reset bet' };
+  await query("UPDATE rooms SET bet_amount = 0 WHERE id = $1", [roomId]);
+};
+
+module.exports = { createRoom, joinRoom, getRoomDetails, leaveRoom, addBot, getPublicRooms, resetBet };

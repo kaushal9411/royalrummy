@@ -129,50 +129,64 @@ function chooseCardMedium(hand, currentTrick, ledSuit, bids, tricksWon, seat) {
 
 function chooseCardHard(hand, currentTrick, ledSuit, bids, tricksWon, seat) {
   const legal = getLegalCards(hand, ledSuit);
-  const needed = bids[seat] - (tricksWon[seat] || 0);
-  const winner = trickWinner(currentTrick, ledSuit);
-  const iAmWinning = winner && winner.seat === seat;
-  const isLastToPlay = currentTrick.length === 3;
+  if (!legal.length) return hand[0]; // safety: should never happen
+  const needed = (bids[seat] ?? 0) - (tricksWon[seat] || 0);
 
+  // ── Leading (first card of the trick) ────────────────────────────────────────
   if (currentTrick.length === 0) {
-    // Leading
-    if (needed <= 0) return lowestCard(legal); // avoid extra tricks
-    const trumps = legal.filter((c) => c.suit === TRUMP_SUIT);
+    if (needed <= 0) return lowestCard(legal); // bid met — avoid over-tricks
+
+    const trumps    = legal.filter((c) => c.suit === TRUMP_SUIT);
     const nonTrumps = legal.filter((c) => c.suit !== TRUMP_SUIT);
-    // Lead high non-trump aces first
+
+    // Cash aces first (highest-probability winners)
     const aces = nonTrumps.filter((c) => c.rank === 'A');
     if (aces.length) return aces[0];
-    if (needed > 0 && trumps.length) return lowestCard(trumps);
-    return highestCard(nonTrumps.length ? nonTrumps : legal);
+
+    // Lead kings if we're not desperate for tricks
+    const kings = nonTrumps.filter((c) => c.rank === 'K');
+    if (kings.length) return kings[0];
+
+    // Probe with lowest trump when out of good non-trump leads
+    if (!nonTrumps.length && trumps.length) return lowestCard(trumps);
+
+    // Lead highest non-trump to apply pressure
+    return nonTrumps.length ? highestCard(nonTrumps) : highestCard(legal);
   }
 
-  if (iAmWinning && (isLastToPlay || needed <= 0)) {
-    return lowestCard(legal);
+  // ── Following ─────────────────────────────────────────────────────────────────
+  const winner     = trickWinner(currentTrick, ledSuit);
+  const winnerCard = winner ? winner.card : null;
+  const isLast     = currentTrick.length === 3;
+
+  // Bid already met — dump the lowest card (avoid over-tricks)
+  if (needed <= 0) return lowestCard(legal);
+
+  // Try to beat with a minimum suited card
+  if (ledSuit) {
+    const beatSuit = legal.filter(
+      (c) => c.suit === ledSuit &&
+             winnerCard != null &&
+             RANK_VALUE[c.rank] > RANK_VALUE[winnerCard.rank]
+    );
+    if (beatSuit.length) return lowestCard(beatSuit);
   }
 
-  if (needed > 0) {
-    const winnerCard = winner ? winner.card : null;
-
-    // Try to win with suited card
-    if (ledSuit) {
-      const suitCards = legal.filter(
-        (c) => c.suit === ledSuit &&
-          (!winnerCard || RANK_VALUE[c.rank] > RANK_VALUE[winnerCard.rank])
-      );
-      if (suitCards.length) return lowestCard(suitCards);
+  // Try to win with trump
+  const trumpCards = legal.filter((c) => c.suit === TRUMP_SUIT);
+  if (trumpCards.length) {
+    if (!winnerCard || winnerCard.suit !== TRUMP_SUIT) {
+      // Current winner is not trump — use lowest trump
+      return lowestCard(trumpCards);
     }
-
-    // Try to win with trump
-    const trumpCards = legal.filter((c) => c.suit === TRUMP_SUIT);
-    if (trumpCards.length) {
-      if (!winnerCard || winnerCard.suit !== TRUMP_SUIT) return lowestCard(trumpCards);
-      const beatTrump = trumpCards.filter(
-        (c) => RANK_VALUE[c.rank] > RANK_VALUE[winnerCard.rank]
-      );
-      if (beatTrump.length) return lowestCard(beatTrump);
-    }
+    // Current winner IS trump — beat it with lowest higher trump
+    const beatTrump = trumpCards.filter(
+      (c) => RANK_VALUE[c.rank] > RANK_VALUE[winnerCard.rank]
+    );
+    if (beatTrump.length) return lowestCard(beatTrump);
   }
 
+  // Can't win — discard lowest card to bleed the hand
   return lowestCard(legal);
 }
 

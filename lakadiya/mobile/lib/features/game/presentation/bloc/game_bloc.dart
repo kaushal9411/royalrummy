@@ -275,7 +275,12 @@ class GameBloc extends Bloc<GameEvent, GameState> {
       _registerSocketListeners();
     }
     _socket.joinRoom(event.roomId);
-    emit(GameWaiting(event.roomId));
+    // Don't revert to waiting if the game is already in progress.
+    // game_page calls GameJoinRoom in initState which can arrive after
+    // bidding_started has already emitted GameInProgress.
+    if (state is! GameInProgress) {
+      emit(GameWaiting(event.roomId));
+    }
   }
 
   void _onStartGame(GameStartGame event, Emitter<GameState> emit) {

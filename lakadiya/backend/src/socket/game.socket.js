@@ -75,7 +75,12 @@ async function scheduleBotActions(io, roomId) {
     setTimeout(async () => {
       const s = gameStates.get(roomId);
       if (!s || s.phase !== 'bidding' || s.currentTurn !== seat) return;
-      const bid = getBotBid(s.hands[seat], player.botLevel);
+      let bid = 1;
+      try { bid = getBotBid(s.hands[seat], player.botLevel); } catch (e) {
+        logger.error('Bot bid calculation error', e);
+      }
+      // Clamp bid to valid range
+      bid = Math.max(1, Math.min(13, Math.round(bid) || 1));
       try {
         engine.placeBid(s, seat, bid);
         gameStates.set(roomId, s);
@@ -84,6 +89,7 @@ async function scheduleBotActions(io, roomId) {
         await scheduleBotActions(io, roomId);
       } catch (e) {
         logger.error('Bot bid error', e);
+        setTimeout(() => scheduleBotActions(io, roomId), 500);
       }
     }, BOT_DELAY_MS);
 
@@ -95,10 +101,31 @@ async function scheduleBotActions(io, roomId) {
     setTimeout(async () => {
       const s = gameStates.get(roomId);
       if (!s || s.phase !== 'playing' || s.currentTurn !== seat) return;
-      const card = getBotCard(
-        s.hands[seat], s.currentTrick, s.ledSuit,
-        s.bids, s.tricksWon, seat, player.botLevel
-      );
+
+      let card;
+      try {
+        card = getBotCard(
+          s.hands[seat], s.currentTrick, s.ledSuit,
+          s.bids, s.tricksWon, seat, player.botLevel
+        );
+      } catch (e) {
+        logger.error('Bot card selection error, falling back to easy', e);
+        // Safety fallback: pick first legal card
+        const hand = s.hands[seat] || [];
+        const led  = s.currentTrick.length === 0 ? null : s.ledSuit;
+        const legalFallback = hand.filter((c) => {
+          if (!led) return true;
+          const hasSuit = hand.some((x) => x.suit === led);
+          return hasSuit ? c.suit === led : true;
+        });
+        card = legalFallback.length ? legalFallback[0] : hand[0];
+      }
+
+      if (!card) {
+        logger.error('Bot has no card to play at seat', seat);
+        return;
+      }
+
       try {
         const result = engine.playCard(s, seat, card);
         gameStates.set(roomId, result.state);
@@ -127,6 +154,8 @@ async function scheduleBotActions(io, roomId) {
         await scheduleBotActions(io, roomId);
       } catch (e) {
         logger.error('Bot play error', e);
+        // Retry in 500ms with a safe fallback card to avoid game freeze
+        setTimeout(() => scheduleBotActions(io, roomId), 500);
       }
     }, BOT_DELAY_MS);
   }

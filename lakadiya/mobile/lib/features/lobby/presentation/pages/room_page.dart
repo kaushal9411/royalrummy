@@ -73,14 +73,60 @@ class _RoomPageState extends State<RoomPage> with TickerProviderStateMixin {
     }
   }
 
+  double get _betAmount =>
+      (num.tryParse(_room?['bet_amount']?.toString() ?? '') ?? 0).toDouble();
+
+  bool get _hasBot =>
+      ((_room?['players'] as List?) ?? []).any((p) => p['is_bot'] == true);
+
   void _startGame() {
+    if (_betAmount > 0 && _hasBot) {
+      _showBotBetWarning();
+      return;
+    }
     context.read<GameBloc>().add(GameStartGame(widget.roomId));
     context.go('/game/${widget.roomId}');
   }
 
+  void _showBotBetWarning() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => _BotBetWarningSheet(
+        betAmount: _betAmount,
+        onPlayFree: () {
+          Navigator.pop(context);
+          _playFreeWithBots();
+        },
+        onCancel: () => Navigator.pop(context),
+      ),
+    );
+  }
+
+  Future<void> _playFreeWithBots() async {
+    setState(() => _loading = true);
+    // Capture context references before the async gap.
+    final gameBloc = context.read<GameBloc>();
+    final router   = GoRouter.of(context);
+    try {
+      await _repo.resetBet(widget.roomId);
+      if (!context.mounted) return;
+      gameBloc.add(GameStartGame(widget.roomId));
+      router.go('/game/${widget.roomId}');
+    } catch (e) {
+      _showError(e.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
   void _showError(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), backgroundColor: AppColors.danger),
+      SnackBar(
+        content: Text(msg.replaceFirst('Exception: ', '')),
+        backgroundColor: AppColors.danger,
+      ),
     );
   }
 
@@ -428,7 +474,7 @@ class _AnimatedPlayerSlot extends StatelessWidget {
     final initial = name?.isNotEmpty == true ? name![0].toUpperCase() : '?';
     final avatarColor = isBot
         ? AppColors.trump
-        : [AppColors.primary, AppColors.accent, Color(0xFF9C27B0), Color(0xFFFF5722)][index % 4];
+        : [AppColors.primary, AppColors.accent, const Color(0xFF9C27B0), const Color(0xFFFF5722)][index % 4];
 
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
@@ -472,7 +518,7 @@ class _AnimatedPlayerSlot extends StatelessWidget {
                           fontSize: isBot ? 20 : 18,
                           fontWeight: FontWeight.bold,
                         ))
-                    : Icon(Icons.person_outline_rounded, color: AppColors.textMuted, size: 22),
+                    : const Icon(Icons.person_outline_rounded, color: AppColors.textMuted, size: 22),
               ),
             ),
             const SizedBox(width: 14),
@@ -530,6 +576,170 @@ class _AnimatedPlayerSlot extends StatelessWidget {
               ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ── Bot + Bet warning bottom sheet ────────────────────────────────────────────
+class _BotBetWarningSheet extends StatelessWidget {
+  final double betAmount;
+  final VoidCallback onPlayFree;
+  final VoidCallback onCancel;
+
+  const _BotBetWarningSheet({
+    required this.betAmount,
+    required this.onPlayFree,
+    required this.onCancel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(24, 16, 24, 36),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFF0E1A2C), Color(0xFF080F18)],
+        ),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        border: Border(
+          top:   BorderSide(color: Color(0xFF1E3050)),
+          left:  BorderSide(color: Color(0xFF1E3050)),
+          right: BorderSide(color: Color(0xFF1E3050)),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Handle bar
+          Container(
+            width: 40, height: 4,
+            decoration: BoxDecoration(
+              color: Colors.white24,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // Warning icon
+          Container(
+            width: 64, height: 64,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: AppColors.danger.withValues(alpha: 0.12),
+              border: Border.all(color: AppColors.danger.withValues(alpha: 0.35)),
+            ),
+            child: const Center(
+              child: Text('⚠️', style: TextStyle(fontSize: 30)),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Title
+          const Text(
+            'Bots Can\'t Join Paid Games',
+            style: TextStyle(
+              color: AppColors.textPrimary,
+              fontWeight: FontWeight.w800,
+              fontSize: 18,
+            ),
+          ),
+          const SizedBox(height: 8),
+
+          // Description
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: RichText(
+              textAlign: TextAlign.center,
+              text: TextSpan(
+                style: const TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 13.5,
+                  height: 1.5,
+                ),
+                children: [
+                  const TextSpan(text: 'Your room has a '),
+                  TextSpan(
+                    text: '₹${betAmount.toInt()} bet',
+                    style: const TextStyle(
+                      color: AppColors.accent,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const TextSpan(
+                    text: ' but bots don\'t have wallets.\nPlay free with bots or remove them to keep the bet.',
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 28),
+
+          // Play Free with Bots button
+          GestureDetector(
+            onTap: onPlayFree,
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF00C853), Color(0xFF007E33)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.primary.withValues(alpha: 0.35),
+                    blurRadius: 14,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text('🤖', style: TextStyle(fontSize: 20)),
+                  SizedBox(width: 10),
+                  Text(
+                    'Play Free with Bots',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Cancel button
+          GestureDetector(
+            onTap: onCancel,
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppColors.darkBorder),
+                color: AppColors.darkSurface,
+              ),
+              child: const Text(
+                'Cancel',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: AppColors.textSecondary,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 15,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

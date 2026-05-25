@@ -19,11 +19,11 @@ class PlayerInfo {
 
   factory PlayerInfo.fromJson(Map<String, dynamic> json) => PlayerInfo(
         seat:     (json['seat'] as num).toInt(),
-        userId:   json['user_id'] as String?,
+        userId:   (json['user_id'] ?? json['userId']) as String?,
         username: json['username'] as String? ?? 'Unknown',
         avatar:   json['avatar'] as String?,
-        isBot:    json['is_bot'] as bool? ?? false,
-        botLevel: json['bot_level'] as String?,
+        isBot:    (json['is_bot'] ?? json['isBot']) as bool? ?? false,
+        botLevel: (json['bot_level'] ?? json['botLevel']) as String?,
       );
 }
 

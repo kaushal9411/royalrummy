@@ -90,28 +90,11 @@ class CardWidget extends StatelessWidget {
   // ── Face card (K / Q / J) ──────────────────────────────────────────────────
   Widget _buildFace() {
     final asset = _faceAsset;
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        if (asset != null)
-          Image.asset(
-            asset,
-            fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => _buildPip(), // fallback
-          ),
-        // Corner label overlaid on top of the image
-        Positioned(
-          top: 2, left: 3,
-          child: _cornerLabel(card.rank, card.symbol),
-        ),
-        Positioned(
-          bottom: 2, right: 3,
-          child: RotatedBox(
-            quarterTurns: 2,
-            child: _cornerLabel(card.rank, card.symbol),
-          ),
-        ),
-      ],
+    if (asset == null) return _buildPip();
+    return Image.asset(
+      asset,
+      fit: BoxFit.cover,
+      errorBuilder: (_, __, ___) => _buildPip(),
     );
   }
 

@@ -1,13 +1,41 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
+import 'package:audioplayers/audioplayers.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../domain/entities/card_entity.dart';
 import '../../domain/entities/game_state_entity.dart';
 import '../bloc/game_bloc.dart';
 import '../widgets/card_widget.dart';
 import '../widgets/bid_dialog.dart';
+
+// ── Sound helper ───────────────────────────────────────────────────────────────
+class _Sfx {
+  static AudioPlayer? _player;
+
+  static Future<void> _play(String name) async {
+    try {
+      _player ??= AudioPlayer();
+      await _player!.stop();
+      await _player!.play(AssetSource('sounds/$name.ogg'));
+    } catch (_) {
+      HapticFeedback.lightImpact();
+    }
+  }
+
+  static void cardDrop() => _play('card_play');
+  static void trickWin() => _play('trick_win');
+  static void gameWin() => _play('game_win');
+
+  static void cleanup() {
+    _player?.dispose();
+    _player = null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 class GamePage extends StatefulWidget {
   final String roomId;
@@ -20,13 +48,18 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
   late final AnimationController _trickAnimCtrl;
   TrickResultData? _animatingTrick;
   TrickResultData? _lastTriggered;
+  bool _gameWinSoundPlayed = false;
 
   @override
   void initState() {
     super.initState();
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
     _trickAnimCtrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 850),
+      duration: const Duration(milliseconds: 1000),
     );
     _trickAnimCtrl.addStatusListener((s) {
       if (s == AnimationStatus.completed && mounted) {
@@ -38,7 +71,12 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
 
   @override
   void dispose() {
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
     _trickAnimCtrl.dispose();
+    _Sfx.cleanup();
     super.dispose();
   }
 
@@ -68,11 +106,11 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
                 WidgetsBinding.instance
                     .addPostFrameCallback((_) => _showBidDialog());
               }
-              // Trick win animation
               if (state.lastTrickResult != null &&
                   !identical(state.lastTrickResult, _lastTriggered) &&
                   state.lastTrickResult!.trickCards.isNotEmpty) {
                 _lastTriggered = state.lastTrickResult;
+                _Sfx.trickWin();
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   if (mounted) {
                     setState(() => _animatingTrick = state.lastTrickResult);
@@ -86,6 +124,10 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
               }
               if (state.gameResult != null &&
                   state.state.phase == 'game_end') {
+                if (!_gameWinSoundPlayed) {
+                  _gameWinSoundPlayed = true;
+                  _Sfx.gameWin();
+                }
                 _showGameResult(ctx, state.gameResult!);
               }
               if (state.errorMessage != null) {
@@ -116,20 +158,18 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
   }
 
   // ── Loading ────────────────────────────────────────────────────────────────
-  Widget _buildLoader() => Stack(
+  Widget _buildLoader() => const Stack(
     children: [
-      const _WoodBackground(),
-      const Center(
-        child: CircularProgressIndicator(color: Colors.white),
-      ),
+      _WoodBackground(),
+      Center(child: CircularProgressIndicator(color: Colors.white)),
     ],
   );
 
   // ── Main game layout ───────────────────────────────────────────────────────
   Widget _buildGame(BuildContext context, GameInProgress gip) {
-    final gs       = gip.state;
-    final mySeat   = gs.mySeat;
-    final topSeat  = (mySeat + 2) % 4;
+    final gs        = gip.state;
+    final mySeat    = gs.mySeat;
+    final topSeat   = (mySeat + 2) % 4;
     final rightSeat = (mySeat + 1) % 4;
     final leftSeat  = (mySeat + 3) % 4;
 
@@ -148,19 +188,12 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
 
     return Stack(
       children: [
-        // ── Wood table ──
         const _WoodBackground(),
-
-        // ── Layout ──
         SafeArea(
           child: Column(
-
             children: [
-              // Top: [X]  [Bot-top + fan]  [♠ trump]
               _buildTopRow(gs, topP, topSeat, gs.bids[topSeat],
                   gs.tricksWon[topSeat] ?? 0, botCards),
-
-              // Middle: Bot-left | Trick area | Bot-right
               Expanded(
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -177,14 +210,10 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
                   ],
                 ),
               ),
-
-              // Player hand row
               _buildPlayerHand(context, gip, myP, mySeat),
             ],
           ),
         ),
-
-        // ── Trick win animation overlay ──
         if (_animatingTrick != null)
           _TrickWinOverlay(
             trick: _animatingTrick!,
@@ -199,62 +228,50 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
   Widget _buildTopRow(GameStateEntity gs, PlayerInfo? player, int seat,
       int? bid, int tricks, int cardCount) {
     return SizedBox(
-      height: 110,
+      height: 68,
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // Exit button
           Padding(
-            padding: const EdgeInsets.all(8),
+            padding: const EdgeInsets.all(6),
             child: GestureDetector(
               onTap: () {
                 context.read<GameBloc>().add(GameLeave());
                 context.go('/lobby');
               },
               child: Container(
-                width: 38, height: 38,
+                width: 34, height: 34,
                 decoration: BoxDecoration(
                   color: Colors.black45,
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Icon(Icons.close_rounded, color: Colors.white, size: 20),
+                child: const Icon(Icons.close_rounded, color: Colors.white, size: 18),
               ),
             ),
           ),
-
-          // Top bot
           Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.start,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const SizedBox(height: 6),
-                // Info row: name + score
-                if (player != null)
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(player.username,
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12,
-                              shadows: [Shadow(color: Colors.black54, blurRadius: 4)])),
-                      const SizedBox(width: 6),
-                      _ScoreBadge(tricks, bid: bid, isTurn: gs.currentTurn == seat),
-                    ],
-                  ),
-                const SizedBox(height: 6),
-                // Card fan pointing down
                 _CardFan(cardCount, baseRotation: math.pi),
+                const SizedBox(width: 10),
+                if (player != null) ...[
+                  Text(player.username,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11,
+                          shadows: [Shadow(color: Colors.black54, blurRadius: 4)])),
+                  const SizedBox(width: 6),
+                  _ScoreBadge(tricks, bid: bid, isTurn: gs.currentTurn == seat),
+                ],
               ],
             ),
           ),
-
-          // Trump indicator
           Padding(
-            padding: const EdgeInsets.all(8),
+            padding: const EdgeInsets.all(6),
             child: Container(
-              width: 38, height: 38,
+              width: 34, height: 34,
               decoration: BoxDecoration(
                 color: Colors.black45,
                 borderRadius: BorderRadius.circular(8),
@@ -262,7 +279,7 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
               child: const Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Text('♠', style: TextStyle(color: Colors.white, fontSize: 16)),
+                  Text('♠', style: TextStyle(color: Colors.white, fontSize: 14)),
                   Text('T', style: TextStyle(color: Colors.white60, fontSize: 8)),
                 ],
               ),
@@ -277,25 +294,23 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
   Widget _buildSideBot(PlayerInfo? player, int seat, int? bid, int tricks,
       int cardCount, {required bool isLeft, required bool isTurn}) {
     return Container(
-      width: 85,
-      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+      width: 68,
+      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 3),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          // Card fan rotated 90°
           _CardFan(cardCount, baseRotation: isLeft ? -math.pi / 2 : math.pi / 2),
-          const SizedBox(height: 8),
-          // Name + score
+          const SizedBox(height: 4),
           if (player != null) ...[
             Text(player.username,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.bold,
-                    fontSize: 11,
+                    fontSize: 10,
                     shadows: [Shadow(color: Colors.black54, blurRadius: 4)]),
                 overflow: TextOverflow.ellipsis),
-            const SizedBox(height: 4),
+            const SizedBox(height: 3),
             _ScoreBadge(tricks, bid: bid, isTurn: isTurn),
           ],
         ],
@@ -310,6 +325,7 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
     return DragTarget<CardEntity>(
       onWillAcceptWithDetails: (_) => canPlay,
       onAcceptWithDetails: (details) {
+        _Sfx.cardDrop();
         context.read<GameBloc>().add(GamePlayCard(details.data));
       },
       builder: (context, candidateData, _) {
@@ -323,9 +339,7 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
                 : Colors.transparent,
             border: hovering
                 ? Border.all(
-                    color: AppColors.primary.withValues(alpha: 0.7),
-                    width: 2,
-                  )
+                    color: AppColors.primary.withValues(alpha: 0.7), width: 2)
                 : null,
           ),
           child: Stack(
@@ -336,23 +350,22 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      gs.isBidding ? 'Bidding…' : (canPlay ? 'Drop card here' : 'Lead a card'),
+                      gs.isBidding
+                          ? 'Bidding…'
+                          : (canPlay ? 'Drop card here' : 'Waiting…'),
                       style: TextStyle(
                         color: hovering ? AppColors.primaryLight : Colors.white54,
-                        fontSize: 14,
-                        fontWeight: hovering ? FontWeight.bold : FontWeight.normal,
+                        fontSize: 13,
+                        fontWeight:
+                            hovering ? FontWeight.bold : FontWeight.normal,
                         shadows: const [Shadow(color: Colors.black, blurRadius: 6)],
                       ),
                     ),
                     if (canPlay && !gs.isBidding) ...[
-                      const SizedBox(height: 6),
-                      Icon(
-                        Icons.arrow_downward_rounded,
-                        color: hovering
-                            ? AppColors.primary
-                            : Colors.white24,
-                        size: 20,
-                      ),
+                      const SizedBox(height: 5),
+                      Icon(Icons.arrow_downward_rounded,
+                          color: hovering ? AppColors.primary : Colors.white24,
+                          size: 18),
                     ],
                   ],
                 )
@@ -360,29 +373,25 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
                 Stack(
                   alignment: Alignment.center,
                   children: List.generate(trick.length, (i) {
-                    final angles  = [-0.15, 0.08, -0.05, 0.12];
-                    final offsets = [
-                      const Offset(-18, -10),
-                      const Offset(10, -14),
-                      const Offset(-6, 12),
-                      const Offset(16, 8),
+                    const angles  = [-0.15, 0.08, -0.05, 0.12];
+                    const offsets = [
+                      Offset(-18, -10), Offset(10, -14),
+                      Offset(-6, 12),   Offset(16, 8),
                     ];
                     return Transform.translate(
                       offset: i < offsets.length ? offsets[i] : Offset.zero,
                       child: Transform.rotate(
                         angle: i < angles.length ? angles[i] : 0,
-                        child: CardWidget(card: trick[i].card, width: 60, height: 86),
+                        child: CardWidget(card: trick[i].card, width: 58, height: 84),
                       ),
                     );
                   }),
                 ),
-
-              // Phase label
               if (gs.isBidding)
                 Positioned(
                   bottom: 8,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
                     decoration: BoxDecoration(
                       color: Colors.black54,
                       borderRadius: BorderRadius.circular(20),
@@ -391,7 +400,7 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
                         style: TextStyle(
                             color: AppColors.accent,
                             fontWeight: FontWeight.bold,
-                            fontSize: 12)),
+                            fontSize: 11)),
                   ),
                 ),
             ],
@@ -401,7 +410,7 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
     );
   }
 
-  // ── Player hand ────────────────────────────────────────────────────────────
+  // ── Player hand — overlapping landscape layout ─────────────────────────────
   Widget _buildPlayerHand(BuildContext context, GameInProgress gip,
       PlayerInfo? myPlayer, int mySeat) {
     final gs       = gip.state;
@@ -410,25 +419,25 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
     final myBid    = gs.bids[mySeat];
     final myTricks = gs.tricksWon[mySeat] ?? 0;
 
-    return ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: 120, maxHeight: 160),
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.25),
-          border: const Border(top: BorderSide(color: Colors.black26, width: 1)),
-        ),
+    return Container(
+      height: 110,
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.28),
+        border: const Border(top: BorderSide(color: Colors.black26, width: 1)),
+      ),
       child: Column(
         children: [
-          // Info bar
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            padding: const EdgeInsets.fromLTRB(10, 3, 10, 0),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
                   myPlayer?.username ?? 'You',
                   style: const TextStyle(
-                      color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12),
                 ),
                 Row(
                   children: [
@@ -437,17 +446,18 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
                     if (canPlay) ...[
                       const SizedBox(width: 8),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 2),
                         decoration: BoxDecoration(
                           color: AppColors.primary.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(10),
                           border: Border.all(
                               color: AppColors.primary.withValues(alpha: 0.4)),
                         ),
-                        child: const Text('Drag to play',
+                        child: const Text('Tap or drag to play',
                             style: TextStyle(
                                 color: AppColors.primaryLight,
-                                fontSize: 11,
+                                fontSize: 10,
                                 fontWeight: FontWeight.w600)),
                       ),
                     ],
@@ -456,52 +466,48 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
               ],
             ),
           ),
-
-          // Cards — draggable when it's player's turn
+          // Overlapping card stack
           Expanded(
             child: hand.isEmpty
                 ? const Center(
-                    child: Text('No cards', style: TextStyle(color: Colors.white38)))
-                : ListView.builder(
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    itemCount: hand.length,
-                    itemBuilder: (_, i) {
-                      final card = hand[i];
-                      if (!canPlay) {
-                        return Padding(
-                          padding: const EdgeInsets.only(right: 3),
-                          child: CardWidget(card: card, width: 68, height: 98),
-                        );
-                      }
-                      return Draggable<CardEntity>(
-                        data: card,
-                        feedback: Material(
-                          color: Colors.transparent,
-                          child: Transform.scale(
-                            scale: 1.12,
-                            child: CardWidget(
-                              card: card,
-                              isSelected: true,
-                              width: 68,
-                              height: 98,
-                            ),
-                          ),
-                        ),
-                        childWhenDragging: Opacity(
-                          opacity: 0.3,
-                          child: Padding(
-                            padding: const EdgeInsets.only(right: 3),
-                            child: CardWidget(card: card, width: 68, height: 98),
-                          ),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.only(right: 3),
-                          child: CardWidget(
-                            card: card,
-                            isPlayable: true,
-                            width: 68,
-                            height: 98,
+                    child: Text('No cards',
+                        style: TextStyle(color: Colors.white38)))
+                : LayoutBuilder(
+                    builder: (_, constraints) {
+                      const cardW = 58.0;
+                      final n = hand.length;
+                      final availW = constraints.maxWidth - 16;
+                      final step = n <= 1
+                          ? 0.0
+                          : ((availW - cardW) / (n - 1))
+                              .clamp(20.0, cardW + 4.0);
+                      final totalW = cardW + step * (n - 1);
+
+                      return Center(
+                        child: SizedBox(
+                          width: totalW,
+                          height: constraints.maxHeight,
+                          child: Stack(
+                            clipBehavior: Clip.none,
+                            children: List.generate(n, (i) {
+                              final card = hand[i];
+                              return Positioned(
+                                left: i * step,
+                                bottom: 0,
+                                child: _HandCard(
+                                  key: ValueKey(
+                                      '${card.suit}_${card.rank}_$i'),
+                                  card: card,
+                                  canPlay: canPlay,
+                                  onPlay: () {
+                                    _Sfx.cardDrop();
+                                    context
+                                        .read<GameBloc>()
+                                        .add(GamePlayCard(card));
+                                  },
+                                ),
+                              );
+                            }),
                           ),
                         ),
                       );
@@ -509,7 +515,6 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
                   ),
           ),
         ],
-      ),
       ),
     );
   }
@@ -524,7 +529,8 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           title: Text('Round ${rr.round} Result',
               textAlign: TextAlign.center,
-              style: const TextStyle(color: AppColors.accent, fontWeight: FontWeight.bold)),
+              style: const TextStyle(
+                  color: AppColors.accent, fontWeight: FontWeight.bold)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: rr.roundScores.map((s) {
@@ -543,11 +549,16 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text('Seat $seat  B:$bid  W:$won',
-                        style: const TextStyle(color: AppColors.textPrimary, fontSize: 13)),
+                        style: const TextStyle(
+                            color: AppColors.textPrimary, fontSize: 13)),
                     Text(
-                      score >= 0 ? '+${score.toStringAsFixed(1)}' : score.toStringAsFixed(1),
+                      score >= 0
+                          ? '+${score.toStringAsFixed(1)}'
+                          : score.toStringAsFixed(1),
                       style: TextStyle(
-                        color: score >= 0 ? AppColors.primaryLight : AppColors.danger,
+                        color: score >= 0
+                            ? AppColors.primaryLight
+                            : AppColors.danger,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -562,7 +573,8 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
                 Navigator.pop(context);
                 context.read<GameBloc>().add(GameNextRound());
               },
-              child: const Text('Next Round', style: TextStyle(color: AppColors.primary)),
+              child: const Text('Next Round',
+                  style: TextStyle(color: AppColors.primary)),
             ),
           ],
         ),
@@ -581,14 +593,18 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           title: const Text('Game Over! 🎉',
               textAlign: TextAlign.center,
-              style: TextStyle(color: AppColors.accent, fontSize: 22, fontWeight: FontWeight.bold)),
+              style: TextStyle(
+                  color: AppColors.accent,
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               Text('🏆 ${gr.winnerName}',
                   style: const TextStyle(
                       color: AppColors.primaryLight,
-                      fontSize: 20, fontWeight: FontWeight.bold)),
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold)),
               const SizedBox(height: 16),
               ...gr.finalScores.entries.map((e) => Padding(
                 padding: const EdgeInsets.symmetric(vertical: 3),
@@ -602,7 +618,9 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
                           ? '+${e.value.toStringAsFixed(1)}'
                           : e.value.toStringAsFixed(1),
                       style: TextStyle(
-                        color: e.value >= 0 ? AppColors.primaryLight : AppColors.danger,
+                        color: e.value >= 0
+                            ? AppColors.primaryLight
+                            : AppColors.danger,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -627,7 +645,96 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
   }
 }
 
-// ── Trick win overlay ──────────────────────────────────────────────────────
+// ── Draggable card with lift animation ────────────────────────────────────────
+class _HandCard extends StatefulWidget {
+  final CardEntity card;
+  final bool canPlay;
+  final VoidCallback? onPlay;
+  const _HandCard({
+    super.key,
+    required this.card,
+    this.canPlay = false,
+    this.onPlay,
+  });
+  @override
+  State<_HandCard> createState() => _HandCardState();
+}
+
+class _HandCardState extends State<_HandCard>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _liftCtrl;
+  static const double _cardW = 58.0;
+  static const double _cardH = 84.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _liftCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 150),
+      upperBound: 14.0,
+    );
+  }
+
+  @override
+  void dispose() {
+    _liftCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.canPlay) {
+      return CardWidget(card: widget.card, width: _cardW, height: _cardH);
+    }
+
+    return AnimatedBuilder(
+      animation: _liftCtrl,
+      builder: (_, child) => Transform.translate(
+        offset: Offset(0, -_liftCtrl.value),
+        child: child,
+      ),
+      child: GestureDetector(
+        onTapDown: (_) => _liftCtrl.forward(),
+        onTapCancel: () => _liftCtrl.reverse(),
+        onTap: () {
+          _liftCtrl.reverse();
+          widget.onPlay?.call();
+        },
+        child: Draggable<CardEntity>(
+          data: widget.card,
+          onDragStarted: () => _liftCtrl.forward(),
+          onDragEnd: (_) => _liftCtrl.reverse(),
+          onDraggableCanceled: (_, __) => _liftCtrl.reverse(),
+          feedback: Material(
+            color: Colors.transparent,
+            child: Transform.scale(
+              scale: 1.15,
+              child: CardWidget(
+                card: widget.card,
+                isSelected: true,
+                width: _cardW,
+                height: _cardH,
+              ),
+            ),
+          ),
+          childWhenDragging: Opacity(
+            opacity: 0.3,
+            child: CardWidget(card: widget.card, width: _cardW, height: _cardH),
+          ),
+          child: CardWidget(
+            card: widget.card,
+            isPlayable: true,
+            width: _cardW,
+            height: _cardH,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Trick win overlay (arc fly + sparkles) ─────────────────────────────────────
 class _TrickWinOverlay extends StatelessWidget {
   final TrickResultData trick;
   final int mySeat;
@@ -640,7 +747,9 @@ class _TrickWinOverlay extends StatelessWidget {
   });
 
   static const _angles  = [-0.15, 0.08, -0.05, 0.12];
-  static const _offsets = [Offset(-18, -10), Offset(10, -14), Offset(-6, 12), Offset(16, 8)];
+  static const _offsets = [
+    Offset(-18, -10), Offset(10, -14), Offset(-6, 12), Offset(16, 8),
+  ];
 
   @override
   Widget build(BuildContext context) {
@@ -648,9 +757,9 @@ class _TrickWinOverlay extends StatelessWidget {
     final relSeat = (trick.winnerSeat - mySeat + 4) % 4;
     // 0=me(bottom) 1=right 2=top 3=left
     final endOffset = [
-      Offset(0,              size.height * 0.46),
+      Offset(0,               size.height * 0.46),
       Offset(size.width * 0.46,  0),
-      Offset(0,             -size.height * 0.46),
+      Offset(0,              -size.height * 0.46),
       Offset(-size.width * 0.46, 0),
     ][relSeat];
     final isMyWin = trick.winnerSeat == mySeat;
@@ -659,33 +768,67 @@ class _TrickWinOverlay extends StatelessWidget {
       animation: animation,
       builder: (_, __) {
         final t = animation.value;
-        // 0-0.35 → hold + show banner, 0.35-1.0 → fly to winner
-        final flyT   = t < 0.35 ? 0.0 : Curves.easeIn.transform((t - 0.35) / 0.65);
-        final cardOp = flyT < 0.82 ? 1.0 : 1.0 - (flyT - 0.82) / 0.18;
-        final dx     = endOffset.dx * flyT;
-        final dy     = endOffset.dy * flyT;
-        final scale  = 1.0 - 0.55 * flyT;
 
-        // banner: fade-in 0-0.15, hold 0.15-0.30, fade-out 0.30-0.45
-        final bannerOp = t < 0.15 ? t / 0.15
-            : t < 0.30 ? 1.0
-            : t < 0.45 ? 1.0 - (t - 0.30) / 0.15
+        // 0–0.28: hold; 0.28–1.0: fly with parabolic arc
+        final flyT   = t < 0.28
+            ? 0.0
+            : Curves.easeIn.transform((t - 0.28) / 0.72);
+        final arcH   = -80.0 * 4 * flyT * (1 - flyT); // parabola peak at flyT=0.5
+        final dx     = endOffset.dx * flyT;
+        final dy     = endOffset.dy * flyT + arcH;
+        final scale  = 1.0 - 0.55 * flyT;
+        final cardOp = flyT < 0.82 ? 1.0 : 1.0 - (flyT - 0.82) / 0.18;
+
+        // banner: fade-in 0–0.12, hold 0.12–0.24, fade-out 0.24–0.35
+        final bannerOp = t < 0.12
+            ? t / 0.12
+            : t < 0.24
+                ? 1.0
+                : t < 0.35
+                    ? 1.0 - (t - 0.24) / 0.11
+                    : 0.0;
+
+        // sparkle: 0.10–0.55
+        final sparkleOp = (t >= 0.10 && t <= 0.55)
+            ? (t < 0.20
+                ? (t - 0.10) / 0.10
+                : t > 0.45
+                    ? 1.0 - (t - 0.45) / 0.10
+                    : 1.0)
             : 0.0;
 
         return Stack(
           children: [
+            // Sparkles around center
+            if (sparkleOp > 0.01)
+              Center(
+                child: Opacity(
+                  opacity: sparkleOp.clamp(0.0, 1.0),
+                  child: SizedBox(
+                    width: 220,
+                    height: 200,
+                    child: CustomPaint(
+                      painter: _SparklePainter(t),
+                    ),
+                  ),
+                ),
+              ),
+
             // Winner banner
             if (bannerOp > 0.01)
               Positioned(
-                top: size.height * 0.37,
+                top: size.height * 0.30,
                 left: 0, right: 0,
                 child: Center(
                   child: Opacity(
-                    opacity: bannerOp,
+                    opacity: bannerOp.clamp(0.0, 1.0),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 26, vertical: 10),
                       decoration: BoxDecoration(
-                        color: isMyWin ? AppColors.primary : const Color(0xFF1A1A2E),
+                        color: isMyWin
+                            ? AppColors.primary
+                            : const Color(0xFF1A1A2E),
                         borderRadius: BorderRadius.circular(30),
                         border: Border.all(
                           color: AppColors.accent.withValues(alpha: 0.6),
@@ -701,11 +844,13 @@ class _TrickWinOverlay extends StatelessWidget {
                         ],
                       ),
                       child: Text(
-                        isMyWin ? '🏆 You win the trick!' : '✨ Seat ${trick.winnerSeat + 1} wins',
+                        isMyWin
+                            ? '🏆 You win the trick!'
+                            : '✨ Seat ${trick.winnerSeat + 1} wins',
                         style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.bold,
-                          fontSize: 20,
+                          fontSize: 18,
                           letterSpacing: 0.5,
                         ),
                       ),
@@ -714,7 +859,7 @@ class _TrickWinOverlay extends StatelessWidget {
                 ),
               ),
 
-            // Cards flying to winner
+            // Cards flying to winner with arc
             if (cardOp > 0.01)
               Center(
                 child: Transform.translate(
@@ -722,7 +867,7 @@ class _TrickWinOverlay extends StatelessWidget {
                   child: Transform.scale(
                     scale: scale,
                     child: Opacity(
-                      opacity: cardOp,
+                      opacity: cardOp.clamp(0.0, 1.0),
                       child: SizedBox(
                         width: 130, height: 120,
                         child: Stack(
@@ -730,12 +875,13 @@ class _TrickWinOverlay extends StatelessWidget {
                           children: List.generate(
                             trick.trickCards.length.clamp(0, 4),
                             (i) => Transform.translate(
-                              offset: i < _offsets.length ? _offsets[i] : Offset.zero,
+                              offset:
+                                  i < _offsets.length ? _offsets[i] : Offset.zero,
                               child: Transform.rotate(
                                 angle: i < _angles.length ? _angles[i] : 0,
                                 child: CardWidget(
                                   card: trick.trickCards[i].card,
-                                  width: 62, height: 88,
+                                  width: 60, height: 86,
                                 ),
                               ),
                             ),
@@ -753,7 +899,54 @@ class _TrickWinOverlay extends StatelessWidget {
   }
 }
 
-// ── Score badge ────────────────────────────────────────────────────────────
+// ── Sparkle painter ────────────────────────────────────────────────────────────
+class _SparklePainter extends CustomPainter {
+  final double t;
+  _SparklePainter(this.t);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rng  = math.Random(42);
+    final cx   = size.width / 2;
+    final cy   = size.height / 2;
+    final fill = Paint()..style = PaintingStyle.fill;
+
+    for (int i = 0; i < 18; i++) {
+      final angle   = (i / 18) * math.pi * 2 + t * math.pi * 1.5;
+      final radius  = 48.0 + rng.nextDouble() * 38.0;
+      final x       = cx + math.cos(angle) * radius;
+      final y       = cy + math.sin(angle) * radius;
+      final dotSize = 2.0 + rng.nextDouble() * 3.0;
+      final hue     = (i * 20.0 + t * 200) % 360;
+      fill.color = HSVColor.fromAHSV(0.9, hue, 0.85, 1.0).toColor();
+
+      // Star shape
+      _drawStar(canvas, Offset(x, y), dotSize * 1.6, fill);
+    }
+  }
+
+  void _drawStar(Canvas canvas, Offset center, double r, Paint paint) {
+    final path = Path();
+    for (int i = 0; i < 5; i++) {
+      final a  = (i * 2 * math.pi / 5) - math.pi / 2;
+      final x  = center.dx + r * math.cos(a);
+      final y  = center.dy + r * math.sin(a);
+      if (i == 0) { path.moveTo(x, y); } else { path.lineTo(x, y); }
+      final ai = a + math.pi / 5;
+      path.lineTo(
+        center.dx + r * 0.4 * math.cos(ai),
+        center.dy + r * 0.4 * math.sin(ai),
+      );
+    }
+    path.close();
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(_SparklePainter old) => old.t != t;
+}
+
+// ── Score badge ────────────────────────────────────────────────────────────────
 class _ScoreBadge extends StatelessWidget {
   final int tricks;
   final int? bid;
@@ -763,7 +956,7 @@ class _ScoreBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) => AnimatedContainer(
     duration: const Duration(milliseconds: 300),
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
     decoration: BoxDecoration(
       color: isTurn
           ? AppColors.primary.withValues(alpha: 0.85)
@@ -774,7 +967,8 @@ class _ScoreBadge extends StatelessWidget {
         width: isTurn ? 1.5 : 0.8,
       ),
       boxShadow: isTurn
-          ? [BoxShadow(color: AppColors.primary.withValues(alpha: 0.4), blurRadius: 8)]
+          ? [BoxShadow(
+              color: AppColors.primary.withValues(alpha: 0.4), blurRadius: 8)]
           : null,
     ),
     child: Text(
@@ -782,13 +976,13 @@ class _ScoreBadge extends StatelessWidget {
       style: TextStyle(
         color: isTurn ? Colors.white : const Color(0xFFCCFF90),
         fontWeight: FontWeight.bold,
-        fontSize: 13,
+        fontSize: 12,
       ),
     ),
   );
 }
 
-// ── Card fan (bot hands) ───────────────────────────────────────────────────
+// ── Card fan (bot hands) ───────────────────────────────────────────────────────
 class _CardFan extends StatelessWidget {
   final int count;
   final double baseRotation;
@@ -796,17 +990,17 @@ class _CardFan extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final n = count.clamp(1, 13);
-    const cw = 34.0;
-    const ch = 50.0;
+    final n      = count.clamp(1, 13);
+    const cw     = 28.0;
+    const ch     = 42.0;
     final spread = (math.pi * 0.50) / n.clamp(1, 13).toDouble();
     final total  = spread * (n - 1);
 
     return Transform.rotate(
       angle: baseRotation,
       child: SizedBox(
-        width: cw + 70,
-        height: ch + 36,
+        width: cw + 60,
+        height: ch + 28,
         child: Stack(
           alignment: Alignment.bottomCenter,
           children: List.generate(n, (i) {
@@ -814,7 +1008,7 @@ class _CardFan extends StatelessWidget {
             return Transform.rotate(
               angle: angle,
               alignment: Alignment.bottomCenter,
-              child: _CardBack(width: cw, height: ch),
+              child: const _CardBack(),
             );
           }),
         ),
@@ -823,19 +1017,20 @@ class _CardFan extends StatelessWidget {
   }
 }
 
-// ── Card back ──────────────────────────────────────────────────────────────
+// ── Card back ──────────────────────────────────────────────────────────────────
 class _CardBack extends StatelessWidget {
-  final double width, height;
-  const _CardBack({this.width = 34, this.height = 50});
+  const _CardBack();
 
   @override
   Widget build(BuildContext context) => Container(
-    width:  width,
-    height: height,
+    width: 28,
+    height: 42,
     decoration: BoxDecoration(
-      borderRadius: BorderRadius.circular(5),
-      border: Border.all(color: Colors.white, width: 1.2),
-      boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 3, offset: Offset(1, 2))],
+      borderRadius: BorderRadius.circular(4),
+      border: Border.all(color: Colors.white, width: 1.0),
+      boxShadow: const [
+        BoxShadow(color: Colors.black45, blurRadius: 3, offset: Offset(1, 2))
+      ],
       gradient: const LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
@@ -843,10 +1038,10 @@ class _CardBack extends StatelessWidget {
       ),
     ),
     child: Padding(
-      padding: const EdgeInsets.all(2.5),
+      padding: const EdgeInsets.all(2),
       child: Container(
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(3),
+          borderRadius: BorderRadius.circular(2),
           border: Border.all(color: Colors.white24),
         ),
         child: CustomPaint(painter: _BackPatternPainter()),
@@ -859,9 +1054,9 @@ class _BackPatternPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.12)
+      ..color       = Colors.white.withValues(alpha: 0.12)
       ..strokeWidth = 1
-      ..style = PaintingStyle.stroke;
+      ..style       = PaintingStyle.stroke;
     const gap = 5.0;
     for (double i = -size.height; i < size.width + size.height; i += gap) {
       canvas.drawLine(Offset(i, 0), Offset(i + size.height, size.height), paint);
@@ -872,14 +1067,12 @@ class _BackPatternPainter extends CustomPainter {
   bool shouldRepaint(_) => false;
 }
 
-// ── Wood background ────────────────────────────────────────────────────────
+// ── Wood background ────────────────────────────────────────────────────────────
 class _WoodBackground extends StatelessWidget {
   const _WoodBackground();
-
   @override
-  Widget build(BuildContext context) => SizedBox.expand(
-    child: CustomPaint(painter: _WoodPainter()),
-  );
+  Widget build(BuildContext context) =>
+      SizedBox.expand(child: CustomPaint(painter: _WoodPainter()));
 }
 
 class _WoodPainter extends CustomPainter {
@@ -887,7 +1080,6 @@ class _WoodPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final rect = Rect.fromLTWH(0, 0, size.width, size.height);
 
-    // Base warm wood color
     canvas.drawRect(
       rect,
       Paint()
@@ -899,7 +1091,6 @@ class _WoodPainter extends CustomPainter {
         ).createShader(rect),
     );
 
-    // Wood grain lines
     final rng  = math.Random(42);
     final dark = Paint()..style = PaintingStyle.stroke;
 
@@ -918,17 +1109,13 @@ class _WoodPainter extends CustomPainter {
       canvas.drawPath(path, dark);
     }
 
-    // Subtle vignette
     canvas.drawRect(
       rect,
       Paint()
         ..shader = RadialGradient(
           center: Alignment.center,
           radius: 1.0,
-          colors: [
-            Colors.transparent,
-            Colors.black.withValues(alpha: 0.25),
-          ],
+          colors: [Colors.transparent, Colors.black.withValues(alpha: 0.25)],
         ).createShader(rect),
     );
   }

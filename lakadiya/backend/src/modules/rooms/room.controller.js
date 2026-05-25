@@ -42,4 +42,11 @@ const getPublicRooms = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-module.exports = { createRoom, joinRoom, getRoomDetails, leaveRoom, addBot, getPublicRooms };
+const resetBet = async (req, res, next) => {
+  try {
+    await roomService.resetBet(req.user.id, req.params.roomId);
+    res.json({ message: 'Bet reset to free' });
+  } catch (err) { next(err); }
+};
+
+module.exports = { createRoom, joinRoom, getRoomDetails, leaveRoom, addBot, getPublicRooms, resetBet };
