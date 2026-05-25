@@ -1,4 +1,4 @@
-# Flutter / Dart
+# ── Flutter / Dart ────────────────────────────────────
 .dart_tool/
 .flutter-plugins
 .flutter-plugins-dependencies
@@ -6,39 +6,58 @@
 .pub-cache/
 .pub/
 build/
+*.g.dart
+*.freezed.dart
 
-# Android
+# Generated metadata
+.metadata
+pubspec.lock
+
+# ── Android ───────────────────────────────────────────
 android/.gradle/
 android/captures/
-android/gradlew
-android/gradlew.bat
 android/local.properties
 android/**/GeneratedPluginRegistrant.java
+android/**/GeneratedPluginRegistrant.kt
 android/key.properties
 *.jks
 
-# iOS
+# ── iOS ───────────────────────────────────────────────
 ios/Flutter/Flutter.framework
 ios/Flutter/Flutter.podspec
 ios/Flutter/.last_build_id
-ios/**/*.xcconfig
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
 ios/Pods/
 ios/.symlinks/
 ios/Runner.xcworkspace/xcuserdata/
 ios/Runner/GeneratedPluginRegistrant.*
+ios/**/*.xcconfig
 
-# Hive local storage (runtime data)
+# ── Desktop (not used — mobile-only project) ──────────
+linux/
+macos/
+windows/
+
+# ── Web (not used) ────────────────────────────────────
+web/
+
+# ── Hive runtime data ─────────────────────────────────
 *.hive
 *.lock
 
-# Environment / secrets
+# ── Environment / secrets ─────────────────────────────
 .env
 lib/core/constants/env.dart
 
-# OS
+# ── Test coverage ─────────────────────────────────────
+coverage/
+
+# ── OS ────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 
-# IDE
+# ── IDE ───────────────────────────────────────────────
 .idea/
 *.iml
+.vscode/
