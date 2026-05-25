@@ -17,6 +17,12 @@ class GameJoinRoom extends GameEvent {
   @override List<Object?> get props => [roomId, mySeat];
 }
 
+class GameStartGame extends GameEvent {
+  final String roomId;
+  GameStartGame(this.roomId);
+  @override List<Object?> get props => [roomId];
+}
+
 class GameStarted extends GameEvent {
   final Map<String, dynamic> data;
   GameStarted(this.data);
@@ -121,6 +127,7 @@ class GameInProgress extends GameState {
   final TrickResultData? lastTrickResult;
   final RoundResultData? lastRoundResult;
   final GameResultData? gameResult;
+  final String? errorMessage;
 
   GameInProgress({
     required this.state,
@@ -128,6 +135,7 @@ class GameInProgress extends GameState {
     this.lastTrickResult,
     this.lastRoundResult,
     this.gameResult,
+    this.errorMessage,
   });
 
   GameInProgress copyWithState(GameStateEntity s) => GameInProgress(
@@ -137,7 +145,7 @@ class GameInProgress extends GameState {
     gameResult: gameResult,
   );
 
-  @override List<Object?> get props => [state, chatMessages, lastTrickResult, lastRoundResult, gameResult];
+  @override List<Object?> get props => [state, chatMessages, lastTrickResult, lastRoundResult, gameResult, errorMessage];
 }
 
 class GameErrorState extends GameState {
@@ -158,7 +166,8 @@ class TrickResultData {
   final int winnerSeat;
   final String ledSuit;
   final Map<int, int> tricksWon;
-  TrickResultData(this.winnerSeat, this.ledSuit, this.tricksWon);
+  final List<TrickPlay> trickCards;
+  TrickResultData(this.winnerSeat, this.ledSuit, this.tricksWon, this.trickCards);
 }
 
 class RoundResultData {
@@ -181,11 +190,15 @@ class GameBloc extends Bloc<GameEvent, GameState> {
   final SocketService _socket;
   String? _roomId;
   int _mySeat = 0;
+  bool _listenersRegistered = false;
+  List<Map<String, dynamic>> _pendingPlayers = [];
+  List<CardEntity> _pendingHand = [];
 
   GameBloc({SocketService? socket})
       : _socket = socket ?? SocketService(),
         super(GameInitial()) {
     on<GameJoinRoom>(_onJoin);
+    on<GameStartGame>(_onStartGame);
     on<GameStarted>(_onStarted);
     on<GameDealtCards>(_onDealt);
     on<GameBiddingStarted>(_onBidding);
@@ -242,40 +255,55 @@ class GameBloc extends Bloc<GameEvent, GameState> {
   }
 
   void _onJoin(GameJoinRoom event, Emitter<GameState> emit) {
-    _roomId  = event.roomId;
-    _mySeat  = event.mySeat;
-    _registerSocketListeners();
+    _roomId = event.roomId;
+    if (event.mySeat != 0) _mySeat = event.mySeat;
+    if (!_listenersRegistered) {
+      _listenersRegistered = true;
+      _registerSocketListeners();
+    }
     _socket.joinRoom(event.roomId);
     emit(GameWaiting(event.roomId));
   }
 
+  void _onStartGame(GameStartGame event, Emitter<GameState> emit) {
+    _socket.startGame(event.roomId);
+  }
+
   void _onStarted(GameStarted event, Emitter<GameState> emit) {
-    // Game started — wait for deal_cards and bidding_started
+    // Store players list sent with game_started for use in _onBidding
+    final raw = event.data['players'];
+    if (raw is List) {
+      _pendingPlayers = raw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    }
   }
 
   void _onDealt(GameDealtCards event, Emitter<GameState> emit) {
-    if (event.seat == _mySeat) {
-      if (state is GameInProgress) {
-        final current = (state as GameInProgress).state;
-        emit((state as GameInProgress).copyWithState(current.copyWith(hand: event.hand)));
-      }
+    // Always update mySeat from the actual seat the server assigned us
+    _mySeat = event.seat;
+    _pendingHand = event.hand;
+    if (state is GameInProgress) {
+      final current = (state as GameInProgress).state;
+      emit((state as GameInProgress).copyWithState(current.copyWith(hand: event.hand)));
     }
   }
 
   void _onBidding(GameBiddingStarted event, Emitter<GameState> emit) {
+    final prevScores = state is GameInProgress
+        ? _rawScores((state as GameInProgress).state.scores)
+        : <String, dynamic>{};
     final gs = GameStateEntity.fromJson({
-      'roomId':      _roomId,
-      'round':       event.data['round'],
-      'phase':       'bidding',
-      'dealer':      event.data['dealer'],
-      'bids':        {},
-      'tricksWon':   {},
-      'scores':      (state is GameInProgress) ? _rawScores((state as GameInProgress).state.scores) : {},
-      'currentTurn': event.data['currentTurn'],
-      'ledSuit':     null,
+      'roomId':       _roomId,
+      'round':        event.data['round'],
+      'phase':        'bidding',
+      'dealer':       event.data['dealer'],
+      'bids':         {},
+      'tricksWon':    {},
+      'scores':       prevScores,
+      'currentTurn':  event.data['currentTurn'],
+      'ledSuit':      null,
       'currentTrick': [],
-      'players':     (state is GameInProgress) ? _rawPlayers((state as GameInProgress).state.players) : [],
-      'hand':        (state is GameInProgress) ? _rawHand((state as GameInProgress).state.hand) : [],
+      'players':      _pendingPlayers,
+      'hand':         _rawHand(_pendingHand),
     }, _mySeat);
     emit(GameInProgress(state: gs));
   }
@@ -300,14 +328,15 @@ class GameBloc extends Bloc<GameEvent, GameState> {
   void _onTrickResult(GameTrickResult event, Emitter<GameState> emit) {
     if (state is! GameInProgress) return;
     final d = event.data;
-    final rawTricks = (d['tricksWon'] as Map<String, dynamic>?) ?? {};
+    final rawTricks = Map<String, dynamic>.from((d['tricksWon'] as Map?) ?? {});
     final tricks = rawTricks.map((k, v) => MapEntry(int.parse(k), (v as num).toInt()));
+    final s = (state as GameInProgress).state;
     final tr = TrickResultData(
       (d['winnerSeat'] as num).toInt(),
       d['ledSuit'] as String? ?? '',
       tricks,
+      List<TrickPlay>.from(s.currentTrick), // capture before clearing
     );
-    final s = (state as GameInProgress).state;
     emit(GameInProgress(
       state: s.copyWith(tricksWon: tricks, currentTrick: []),
       chatMessages: (state as GameInProgress).chatMessages,
@@ -391,7 +420,19 @@ class GameBloc extends Bloc<GameEvent, GameState> {
   }
 
   void _onError(GameErrorReceived event, Emitter<GameState> emit) {
-    emit(GameErrorState(event.message));
+    if (state is GameInProgress) {
+      final prev = state as GameInProgress;
+      emit(GameInProgress(
+        state: prev.state,
+        chatMessages: prev.chatMessages,
+        lastTrickResult: prev.lastTrickResult,
+        lastRoundResult: prev.lastRoundResult,
+        gameResult: prev.gameResult,
+        errorMessage: event.message,
+      ));
+    } else {
+      emit(GameErrorState(event.message));
+    }
   }
 
   void _onChat(GameChatReceived event, Emitter<GameState> emit) {
@@ -419,12 +460,6 @@ class GameBloc extends Bloc<GameEvent, GameState> {
 
   Map<String, dynamic> _rawScores(Map<int, double> scores) =>
       scores.map((k, v) => MapEntry(k.toString(), v));
-
-  List<Map<String, dynamic>> _rawPlayers(List<PlayerInfo> players) =>
-      players.map((p) => {
-        'seat': p.seat, 'user_id': p.userId, 'username': p.username,
-        'avatar': p.avatar, 'is_bot': p.isBot, 'bot_level': p.botLevel,
-      }).toList();
 
   List<Map<String, dynamic>> _rawHand(List<CardEntity> hand) =>
       hand.map((c) => c.toJson()).toList();

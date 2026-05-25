@@ -57,9 +57,3 @@ flutter:
     - assets/animations/
     - assets/cards/
 
-  fonts:
-    - family: GameFont
-      fonts:
-        - asset: assets/fonts/Nunito-Regular.ttf
-        - asset: assets/fonts/Nunito-Bold.ttf
-          weight: 700

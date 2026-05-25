@@ -19,14 +19,17 @@ class UserEntity {
     required this.provider,
   });
 
+  static int _i(dynamic v, int def) =>
+      (num.tryParse(v?.toString() ?? '') ?? def).toInt();
+
   factory UserEntity.fromJson(Map<String, dynamic> json) => UserEntity(
         id:        json['id'] as String,
         username:  json['username'] as String,
         email:     json['email'] as String?,
         avatarUrl: json['avatar_url'] as String?,
-        coins:     (json['coins'] as num?)?.toInt() ?? 1000,
-        xp:        (json['xp'] as num?)?.toInt() ?? 0,
-        level:     (json['level'] as num?)?.toInt() ?? 1,
+        coins:     _i(json['coins'],  1000),
+        xp:        _i(json['xp'],     0),
+        level:     _i(json['level'],  1),
         provider:  json['provider'] as String? ?? 'local',
       );
 

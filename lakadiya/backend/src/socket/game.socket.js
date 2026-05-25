@@ -222,7 +222,18 @@ function registerGameSocket(io, socket) {
       engine.startRound(state);
       gameStates.set(roomId, state);
 
-      io.to(roomId).emit('game_started', { matchId, round: state.round });
+      io.to(roomId).emit('game_started', {
+        matchId,
+        round:   state.round,
+        players: players.map((p) => ({
+          seat:     p.seat,
+          userId:   p.userId,
+          username: p.username,
+          avatar:   p.avatar,
+          isBot:    p.isBot,
+          botLevel: p.botLevel,
+        })),
+      });
 
       // Send each player their hand
       for (const player of players) {

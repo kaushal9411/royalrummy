@@ -10,22 +10,40 @@ import '../../data/room_repository.dart';
 class RoomPage extends StatefulWidget {
   final String roomId;
   const RoomPage({super.key, required this.roomId});
-
   @override
   State<RoomPage> createState() => _RoomPageState();
 }
 
-class _RoomPageState extends State<RoomPage> {
+class _RoomPageState extends State<RoomPage> with TickerProviderStateMixin {
   final _repo  = RoomRepository();
   Map<String, dynamic>? _room;
   bool _loading = false;
 
+  late final AnimationController _pulseCtrl;
+  late final AnimationController _enterCtrl;
+  late final Animation<double>   _pulseAnim;
+  late final Animation<double>   _fadeIn;
+
   @override
   void initState() {
     super.initState();
+    _pulseCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat(reverse: true);
+    _enterCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 600));
+    _pulseAnim = CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut);
+    _fadeIn    = CurvedAnimation(parent: _enterCtrl, curve: Curves.easeOut);
+
     _loadRoom();
-    // Listen for game start via socket
     context.read<GameBloc>().add(GameJoinRoom(widget.roomId, 0));
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (mounted) _enterCtrl.forward();
+    });
+  }
+
+  @override
+  void dispose() {
+    _pulseCtrl.dispose();
+    _enterCtrl.dispose();
+    super.dispose();
   }
 
   Future<void> _loadRoom() async {
@@ -41,8 +59,7 @@ class _RoomPageState extends State<RoomPage> {
     return _room?['host_id'] == auth.user.id;
   }
 
-  int get _playerCount =>
-      (_room?['players'] as List?)?.length ?? 0;
+  int get _playerCount => (_room?['players'] as List?)?.length ?? 0;
 
   Future<void> _addBot(String level) async {
     setState(() => _loading = true);
@@ -57,25 +74,8 @@ class _RoomPageState extends State<RoomPage> {
   }
 
   void _startGame() {
-    context.read<GameBloc>().add(GameJoinRoom(widget.roomId, _mySeat()));
-    // start_game is triggered via socket from GameBloc
-    // Actually send via socket directly
-    final socket = context.read<GameBloc>();
-    socket.add(GameJoinRoom(widget.roomId, _mySeat()));
-    // emit start_game
+    context.read<GameBloc>().add(GameStartGame(widget.roomId));
     context.go('/game/${widget.roomId}');
-  }
-
-  int _mySeat() {
-    final auth = context.read<AuthBloc>().state;
-    if (auth is! AuthAuthenticated) return 0;
-    final players = _room?['players'] as List? ?? [];
-    for (final p in players) {
-      if ((p as Map)['user_id'] == auth.user.id) {
-        return (p['seat'] as num).toInt();
-      }
-    }
-    return 0;
   }
 
   void _showError(String msg) {
@@ -87,7 +87,10 @@ class _RoomPageState extends State<RoomPage> {
   @override
   Widget build(BuildContext context) {
     if (_room == null) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return Scaffold(
+        backgroundColor: AppColors.darkBg,
+        body: const Center(child: CircularProgressIndicator(color: AppColors.primary)),
+      );
     }
 
     final code    = _room!['code'] as String;
@@ -95,149 +98,372 @@ class _RoomPageState extends State<RoomPage> {
     final isHost  = _isHost;
 
     return Scaffold(
+      backgroundColor: AppColors.darkBg,
       appBar: AppBar(
-        title: const Text('Waiting Room'),
+        backgroundColor: AppColors.darkSurface,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: AppColors.textPrimary, size: 20),
+          onPressed: () => context.go('/lobby'),
+        ),
+        title: const Text('Waiting Room',
+            style: TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.bold)),
+        iconTheme: const IconThemeData(color: AppColors.textPrimary),
         actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _loadRoom),
+          IconButton(
+            icon: const Icon(Icons.refresh_rounded, color: AppColors.textSecondary),
+            onPressed: _loadRoom,
+          ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            // Room code
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: AppColors.darkSurface,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.darkBorder),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      body: FadeTransition(
+        opacity: _fadeIn,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // ── Room code card ──
+              _buildCodeCard(code),
+              const SizedBox(height: 24),
+
+              // ── Players ──
+              Row(
                 children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Room Code',
-                          style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
-                      Text(code,
-                          style: const TextStyle(
-                            color: AppColors.accent,
-                            fontSize: 28, fontWeight: FontWeight.bold,
-                            letterSpacing: 4,
-                          )),
-                    ],
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.copy, color: AppColors.textSecondary),
-                    onPressed: () {
-                      Clipboard.setData(ClipboardData(text: code));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Code copied!')),
-                      );
-                    },
-                  ),
+                  const Icon(Icons.people_rounded, color: AppColors.accent, size: 20),
+                  const SizedBox(width: 8),
+                  Text('Players ($_playerCount / 4)',
+                      style: const TextStyle(color: AppColors.textPrimary,
+                          fontWeight: FontWeight.bold, fontSize: 18)),
                 ],
               ),
-            ),
-            const SizedBox(height: 24),
+              const SizedBox(height: 14),
+              ...List.generate(4, (i) => _AnimatedPlayerSlot(
+                player: i < players.length ? players[i] as Map : null,
+                index: i,
+                hostId: _room!['host_id'] as String?,
+              )),
 
-            // Players list
-            Text('Players ($_playerCount / 4)',
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 12),
-            Expanded(
-              child: ListView.builder(
-                itemCount: 4,
-                itemBuilder: (_, i) {
-                  final player = i < players.length ? players[i] as Map : null;
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 8),
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              const SizedBox(height: 24),
+
+              // ── Host controls ──
+              if (isHost) ...[
+                if (_playerCount < 4)
+                  _buildAddBotButton(),
+                const SizedBox(height: 12),
+                _buildStartButton(),
+              ] else ...[
+                AnimatedBuilder(
+                  animation: _pulseAnim,
+                  builder: (_, __) => Container(
+                    padding: const EdgeInsets.all(20),
                     decoration: BoxDecoration(
-                      color: player != null ? AppColors.darkSurface : AppColors.darkCard,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: AppColors.darkBorder),
-                    ),
-                    child: Row(
-                      children: [
-                        CircleAvatar(
-                          radius: 16,
-                          backgroundColor: player != null
-                              ? (player['is_bot'] == true ? AppColors.trump : AppColors.primary)
-                              : AppColors.darkBorder,
-                          child: Text(
-                            player != null
-                                ? (player['username'] as String? ?? 'B').substring(0, 1).toUpperCase()
-                                : '${i + 1}',
-                            style: TextStyle(
-                              color: player != null ? Colors.white : AppColors.textMuted,
-                              fontSize: 12,
-                            ),
-                          ),
+                      borderRadius: BorderRadius.circular(16),
+                      color: AppColors.darkSurface,
+                      border: Border.all(
+                        color: AppColors.primary.withValues(alpha: 0.2 + _pulseAnim.value * 0.3),
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppColors.primary.withValues(alpha: 0.05 + _pulseAnim.value * 0.08),
+                          blurRadius: 16,
                         ),
-                        const SizedBox(width: 12),
-                        Text(
-                          player != null
-                              ? (player['is_bot'] == true
-                                  ? '🤖 Bot (${player['bot_level']})'
-                                  : player['username'] as String? ?? 'Player')
-                              : 'Waiting…',
-                          style: TextStyle(
-                            color: player != null ? AppColors.textPrimary : AppColors.textMuted,
-                          ),
-                        ),
-                        const Spacer(),
-                        if (player != null && player['user_id'] == _room!['host_id'])
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: AppColors.accent.withValues(alpha: 0.2),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: const Text('Host',
-                                style: TextStyle(color: AppColors.accent, fontSize: 11)),
-                          ),
                       ],
                     ),
-                  );
-                },
-              ),
-            ),
-
-            // Host controls
-            if (isHost) ...[
-              const SizedBox(height: 8),
-              if (_playerCount < 4)
-                PopupMenuButton<String>(
-                  onSelected: _loading ? null : _addBot,
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(value: 'easy',   child: Text('Easy Bot')),
-                    PopupMenuItem(value: 'medium', child: Text('Medium Bot')),
-                    PopupMenuItem(value: 'hard',   child: Text('Hard Bot')),
-                  ],
-                  child: OutlinedButton.icon(
-                    onPressed: null,
-                    icon: const Icon(Icons.smart_toy_outlined),
-                    label: const Text('Add Bot'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.textPrimary,
-                      side: const BorderSide(color: AppColors.darkBorder),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        SizedBox(
+                          width: 18, height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: AppColors.primary.withValues(alpha: 0.5 + _pulseAnim.value * 0.5),
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        const Text('Waiting for host to start…',
+                            style: TextStyle(color: AppColors.textSecondary, fontSize: 15)),
+                      ],
                     ),
                   ),
                 ),
-              const SizedBox(height: 12),
-              ElevatedButton.icon(
-                onPressed: _playerCount == 4 ? _startGame : null,
-                icon: const Icon(Icons.play_arrow),
-                label: Text(_playerCount < 4
-                    ? 'Need ${4 - _playerCount} more player(s)'
-                    : 'Start Game'),
-                style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(50)),
+              ],
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCodeCard(String code) => Container(
+    padding: const EdgeInsets.all(20),
+    decoration: BoxDecoration(
+      borderRadius: BorderRadius.circular(20),
+      gradient: const LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [Color(0xFF0D2030), Color(0xFF0A1A28)],
+      ),
+      border: Border.all(color: AppColors.accent.withValues(alpha: 0.3)),
+      boxShadow: [
+        BoxShadow(color: AppColors.accent.withValues(alpha: 0.08), blurRadius: 16, offset: const Offset(0, 4)),
+      ],
+    ),
+    child: Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: AppColors.accent.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: const Icon(Icons.tag_rounded, color: AppColors.accent, size: 22),
+        ),
+        const SizedBox(width: 16),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Room Code', style: TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+              Text(code,
+                  style: const TextStyle(
+                    color: AppColors.accent,
+                    fontSize: 30,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 6,
+                  )),
+            ],
+          ),
+        ),
+        GestureDetector(
+          onTap: () {
+            Clipboard.setData(ClipboardData(text: code));
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Code copied!'), duration: Duration(seconds: 1)),
+            );
+          },
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppColors.darkCard,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: AppColors.darkBorder),
+            ),
+            child: const Icon(Icons.copy_rounded, color: AppColors.textSecondary, size: 18),
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Widget _buildAddBotButton() => PopupMenuButton<String>(
+    onSelected: _loading ? null : _addBot,
+    itemBuilder: (_) => [
+      const PopupMenuItem(value: 'easy',
+          child: Row(children: [
+            Text('🤖 ', style: TextStyle(fontSize: 18)),
+            Text('Easy Bot', style: TextStyle(color: AppColors.primaryLight)),
+          ])),
+      const PopupMenuItem(value: 'medium',
+          child: Row(children: [
+            Text('🤖 ', style: TextStyle(fontSize: 18)),
+            Text('Medium Bot', style: TextStyle(color: AppColors.accent)),
+          ])),
+      const PopupMenuItem(value: 'hard',
+          child: Row(children: [
+            Text('🤖 ', style: TextStyle(fontSize: 18)),
+            Text('Hard Bot', style: TextStyle(color: AppColors.danger)),
+          ])),
+    ],
+    child: Container(
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.darkBorder),
+        color: AppColors.darkSurface,
+      ),
+      child: const Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.smart_toy_rounded, color: AppColors.textSecondary, size: 20),
+          SizedBox(width: 10),
+          Text('Add Bot', style: TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w600)),
+          SizedBox(width: 6),
+          Icon(Icons.expand_more_rounded, color: AppColors.textSecondary, size: 18),
+        ],
+      ),
+    ),
+  );
+
+  Widget _buildStartButton() {
+    final canStart = _playerCount == 4;
+    return AnimatedBuilder(
+      animation: _pulseAnim,
+      builder: (_, __) => GestureDetector(
+        onTap: canStart ? _startGame : null,
+        child: Container(
+          height: 56,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            gradient: canStart
+                ? LinearGradient(
+                    colors: [
+                      AppColors.primary.withValues(alpha: 0.9 + _pulseAnim.value * 0.1),
+                      AppColors.primaryDark,
+                    ],
+                  )
+                : null,
+            color: canStart ? null : AppColors.darkCard,
+            boxShadow: canStart
+                ? [BoxShadow(
+                    color: AppColors.primary.withValues(alpha: 0.3 + _pulseAnim.value * 0.2),
+                    blurRadius: 16 + _pulseAnim.value * 8,
+                    offset: const Offset(0, 4),
+                  )]
+                : null,
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                canStart ? Icons.play_circle_filled_rounded : Icons.hourglass_empty_rounded,
+                color: canStart ? Colors.white : AppColors.textMuted,
+                size: 24,
+              ),
+              const SizedBox(width: 10),
+              Text(
+                canStart ? 'Start Game' : 'Need ${4 - _playerCount} more player(s)',
+                style: TextStyle(
+                  color: canStart ? Colors.white : AppColors.textMuted,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
               ),
             ],
-            const SizedBox(height: 8),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Animated player slot ───────────────────────────────────────────────────
+class _AnimatedPlayerSlot extends StatelessWidget {
+  final Map? player;
+  final int index;
+  final String? hostId;
+  const _AnimatedPlayerSlot({this.player, required this.index, this.hostId});
+
+  @override
+  Widget build(BuildContext context) {
+    final filled  = player != null;
+    final isBot   = player?['is_bot'] == true;
+    final isHost  = filled && player!['user_id'] == hostId;
+    final name    = filled ? (player!['username'] as String? ?? 'Player') : null;
+    final botLvl  = player?['bot_level'] as String?;
+    final initial = name?.isNotEmpty == true ? name![0].toUpperCase() : '?';
+    final avatarColor = isBot
+        ? AppColors.trump
+        : [AppColors.primary, AppColors.accent, Color(0xFF9C27B0), Color(0xFFFF5722)][index % 4];
+
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: Duration(milliseconds: 200 + index * 100),
+      curve: Curves.easeOut,
+      builder: (_, v, child) => Opacity(
+        opacity: v,
+        child: Transform.translate(offset: Offset(-20 * (1 - v), 0), child: child),
+      ),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(14),
+          color: filled ? AppColors.darkSurface : AppColors.darkCard,
+          border: Border.all(
+            color: filled
+                ? (isHost ? AppColors.accent.withValues(alpha: 0.4) : AppColors.darkBorder)
+                : AppColors.darkBorder.withValues(alpha: 0.4),
+          ),
+          boxShadow: filled ? [
+            BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 6, offset: const Offset(0, 2)),
+          ] : null,
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 44, height: 44,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: filled ? avatarColor.withValues(alpha: 0.15) : AppColors.darkBorder.withValues(alpha: 0.3),
+                border: Border.all(
+                  color: filled ? avatarColor.withValues(alpha: 0.5) : AppColors.darkBorder.withValues(alpha: 0.3),
+                ),
+              ),
+              child: Center(
+                child: filled
+                    ? Text(isBot ? '🤖' : initial,
+                        style: TextStyle(
+                          color: avatarColor,
+                          fontSize: isBot ? 20 : 18,
+                          fontWeight: FontWeight.bold,
+                        ))
+                    : Icon(Icons.person_outline_rounded, color: AppColors.textMuted, size: 22),
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    filled
+                        ? (isBot ? 'Bot ${botLvl != null ? "(${botLvl[0].toUpperCase()}${botLvl.substring(1)})" : ""}' : name!)
+                        : 'Waiting…',
+                    style: TextStyle(
+                      color: filled ? AppColors.textPrimary : AppColors.textMuted,
+                      fontWeight: filled ? FontWeight.w600 : FontWeight.normal,
+                      fontSize: 15,
+                    ),
+                  ),
+                  if (filled && !isBot)
+                    Text('Seat ${index + 1}',
+                        style: const TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+                ],
+              ),
+            ),
+            if (isHost)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppColors.accent.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppColors.accent.withValues(alpha: 0.3)),
+                ),
+                child: const Text('HOST',
+                    style: TextStyle(color: AppColors.accent, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1)),
+              )
+            else if (isBot)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppColors.trump.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppColors.trump.withValues(alpha: 0.3)),
+                ),
+                child: Text(
+                  (botLvl ?? 'bot').toUpperCase(),
+                  style: const TextStyle(color: AppColors.trump, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1),
+                ),
+              )
+            else if (!filled)
+              Container(
+                width: 8, height: 8,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: AppColors.textMuted.withValues(alpha: 0.4),
+                ),
+              ),
           ],
         ),
       ),

@@ -34,7 +34,7 @@ class TrickPlay {
 
   factory TrickPlay.fromJson(Map<String, dynamic> json) => TrickPlay(
         seat: (json['seat'] as num).toInt(),
-        card: CardEntity.fromJson(json['card'] as Map<String, dynamic>),
+        card: CardEntity.fromJson(Map<String, dynamic>.from(json['card'] as Map)),
       );
 }
 
@@ -76,9 +76,12 @@ class GameStateEntity {
   bool get isPlaying => phase == 'playing';
 
   factory GameStateEntity.fromJson(Map<String, dynamic> json, int mySeat) {
-    final bidsRaw = (json['bids'] as Map<String, dynamic>?) ?? {};
-    final tricksRaw = (json['tricksWon'] as Map<String, dynamic>?) ?? {};
-    final scoresRaw = (json['scores'] as Map<String, dynamic>?) ?? {};
+    Map<String, dynamic> toMap(dynamic v) =>
+        v != null ? Map<String, dynamic>.from(v as Map) : <String, dynamic>{};
+
+    final bidsRaw   = toMap(json['bids']);
+    final tricksRaw = toMap(json['tricksWon']);
+    final scoresRaw = toMap(json['scores']);
 
     return GameStateEntity(
       roomId:       json['roomId'] as String,
@@ -92,13 +95,13 @@ class GameStateEntity {
       currentTurn:  (json['currentTurn'] as num?)?.toInt(),
       ledSuit:      json['ledSuit'] as String?,
       currentTrick: (json['currentTrick'] as List<dynamic>? ?? [])
-          .map((e) => TrickPlay.fromJson(e as Map<String, dynamic>))
+          .map((e) => TrickPlay.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
       players: (json['players'] as List<dynamic>? ?? [])
-          .map((e) => PlayerInfo.fromJson(e as Map<String, dynamic>))
+          .map((e) => PlayerInfo.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
       hand: (json['hand'] as List<dynamic>? ?? [])
-          .map((e) => CardEntity.fromJson(e as Map<String, dynamic>))
+          .map((e) => CardEntity.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
       mySeat: mySeat,
     );
