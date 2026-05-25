@@ -18,6 +18,15 @@ const start = async () => {
     server.listen(PORT, () => {
       logger.info(`Server running on port ${PORT}`);
     });
+
+    server.on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        logger.error(`Port ${PORT} is already in use. Run: npx kill-port ${PORT}`);
+      } else {
+        logger.error('Server error', err);
+      }
+      process.exit(1);
+    });
   } catch (err) {
     logger.error('Failed to start server', err);
     process.exit(1);

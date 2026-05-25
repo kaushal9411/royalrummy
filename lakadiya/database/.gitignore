@@ -1,0 +1,5 @@
+# Database dumps and backups
+*.sql.gz
+*.dump
+backups/
+seeds/local/

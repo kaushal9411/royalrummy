@@ -1,11 +1,42 @@
 require('dotenv').config();
-const fs = require('fs');
+const fs   = require('fs');
 const path = require('path');
-const { pool } = require('../config/database');
+const { Client, Pool } = require('pg');
 
 const MIGRATIONS_DIR = path.join(__dirname, '../../../database/migrations');
 
+const dbName = process.env.DB_NAME || 'lakadiya';
+
+const baseConfig = {
+  host:     process.env.DB_HOST     || 'localhost',
+  port:     parseInt(process.env.DB_PORT || '5432'),
+  user:     process.env.DB_USER     || 'postgres',
+  password: process.env.DB_PASSWORD || 'postgres',
+};
+
+async function ensureDatabase() {
+  // Connect to the default 'postgres' database to check/create our db
+  const adminClient = new Client({ ...baseConfig, database: 'postgres' });
+  await adminClient.connect();
+  try {
+    const res = await adminClient.query(
+      `SELECT 1 FROM pg_database WHERE datname = $1`, [dbName]
+    );
+    if (res.rowCount === 0) {
+      await adminClient.query(`CREATE DATABASE "${dbName}"`);
+      console.log(`[init] Database "${dbName}" created.`);
+    } else {
+      console.log(`[init] Database "${dbName}" already exists.`);
+    }
+  } finally {
+    await adminClient.end();
+  }
+}
+
 async function migrate() {
+  await ensureDatabase();
+
+  const pool = new Pool({ ...baseConfig, database: dbName, max: 5 });
   const client = await pool.connect();
   try {
     await client.query(`
@@ -37,7 +68,7 @@ async function migrate() {
     }
     console.log('All migrations complete.');
   } catch (err) {
-    await client.query('ROLLBACK');
+    await client.query('ROLLBACK').catch(() => {});
     console.error('Migration failed:', err.message);
     process.exit(1);
   } finally {
