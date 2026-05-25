@@ -18,6 +18,7 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
 
   late final AnimationController _enterCtrl;
   late final AnimationController _avatarCtrl;
+  late final AnimationController _xpCtrl;
   late final Animation<double>   _fadeIn;
   late final Animation<double>   _avatarScale;
   late final Animation<double>   _avatarGlow;
@@ -26,15 +27,14 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
   void initState() {
     super.initState();
     _enterCtrl  = AnimationController(vsync: this, duration: const Duration(milliseconds: 700));
-    _avatarCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 2))
-      ..repeat(reverse: true);
-    _fadeIn      = CurvedAnimation(parent: _enterCtrl, curve: Curves.easeOut);
+    _avatarCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 3))..repeat(reverse: true);
+    _xpCtrl     = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400));
+    _fadeIn     = CurvedAnimation(parent: _enterCtrl, curve: Curves.easeOut);
     _avatarScale = TweenSequence([
       TweenSequenceItem(tween: Tween(begin: 0.0, end: 1.08), weight: 60),
       TweenSequenceItem(tween: Tween(begin: 1.08, end: 1.0),  weight: 40),
     ]).animate(CurvedAnimation(parent: _enterCtrl, curve: Curves.easeOut));
-    _avatarGlow  = CurvedAnimation(parent: _avatarCtrl, curve: Curves.easeInOut);
-
+    _avatarGlow = CurvedAnimation(parent: _avatarCtrl, curve: Curves.easeInOut);
     _load();
   }
 
@@ -42,10 +42,19 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
   void dispose() {
     _enterCtrl.dispose();
     _avatarCtrl.dispose();
+    _xpCtrl.dispose();
     super.dispose();
   }
 
   num _n(dynamic v) => num.tryParse(v?.toString() ?? '') ?? 0;
+
+  double get _xpPct {
+    if (_profile == null) return 0;
+    final xp        = _n(_profile!['xp']).toDouble();
+    final level     = _n(_profile!['level']).toInt().clamp(1, 100);
+    final threshold = level * 500.0;
+    return ((xp % threshold) / threshold).clamp(0.0, 1.0);
+  }
 
   Future<void> _load() async {
     try {
@@ -61,6 +70,7 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
           _loading = false;
         });
         _enterCtrl.forward();
+        _xpCtrl.forward();
       }
     } catch (_) {
       if (mounted) setState(() => _loading = false);
@@ -70,72 +80,105 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.darkBg,
-      appBar: AppBar(
-        backgroundColor: AppColors.darkSurface,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: AppColors.textPrimary, size: 20),
-          onPressed: () => context.go('/lobby'),
-        ),
-        title: const Text('Profile',
-            style: TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.bold)),
-        iconTheme: const IconThemeData(color: AppColors.textPrimary),
-        actions: [
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert_rounded, color: AppColors.textSecondary),
-            color: AppColors.darkCard,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            onSelected: (v) {
-              if (v == 'logout') context.read<AuthBloc>().add(AuthLogoutRequested());
-            },
-            itemBuilder: (_) => [
-              const PopupMenuItem(
-                value: 'logout',
-                child: Row(
-                  children: [
-                    Icon(Icons.logout_rounded, color: AppColors.danger, size: 18),
-                    SizedBox(width: 10),
-                    Text('Logout', style: TextStyle(color: AppColors.danger)),
-                  ],
+      backgroundColor: Colors.transparent,
+      body: Stack(
+        children: [
+          _ProfileBg(anim: _avatarGlow),
+          SafeArea(
+            child: Column(
+              children: [
+                _buildHeader(context),
+                Expanded(
+                  child: _loading
+                      ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
+                      : _profile == null
+                          ? const Center(child: Text('Could not load profile',
+                              style: TextStyle(color: AppColors.textSecondary)))
+                          : FadeTransition(
+                              opacity: _fadeIn,
+                              child: SingleChildScrollView(
+                                padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  children: [
+                                    _buildHero(),
+                                    const SizedBox(height: 16),
+                                    _buildStats(),
+                                    const SizedBox(height: 16),
+                                    _buildHistory(),
+                                    const SizedBox(height: 24),
+                                  ],
+                                ),
+                              ),
+                            ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
-          : _profile == null
-              ? const Center(child: Text('Could not load profile',
-                  style: TextStyle(color: AppColors.textSecondary)))
-              : FadeTransition(
-                  opacity: _fadeIn,
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        _buildHero(),
-                        const SizedBox(height: 20),
-                        _buildStats(),
-                        const SizedBox(height: 20),
-                        _buildHistory(),
-                        const SizedBox(height: 24),
-                      ],
-                    ),
-                  ),
-                ),
     );
   }
+
+  Widget _buildHeader(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+    child: Row(
+      children: [
+        GestureDetector(
+          onTap: () => context.go('/lobby'),
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppColors.darkCard.withValues(alpha: 0.85),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.darkBorder),
+            ),
+            child: const Icon(Icons.arrow_back_ios_new_rounded,
+                size: 18, color: AppColors.textPrimary),
+          ),
+        ),
+        const SizedBox(width: 14),
+        ShaderMask(
+          shaderCallback: (b) => const LinearGradient(
+            colors: [AppColors.textPrimary, AppColors.textSecondary],
+          ).createShader(b),
+          child: const Text('Profile',
+              style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w800)),
+        ),
+        const Spacer(),
+        PopupMenuButton<String>(
+          icon: const Icon(Icons.more_vert_rounded, color: AppColors.textSecondary),
+          color: AppColors.darkCard,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          onSelected: (v) {
+            if (v == 'logout') context.read<AuthBloc>().add(AuthLogoutRequested());
+          },
+          itemBuilder: (_) => [
+            const PopupMenuItem(
+              value: 'logout',
+              child: Row(children: [
+                Icon(Icons.logout_rounded, color: AppColors.danger, size: 18),
+                SizedBox(width: 10),
+                Text('Logout', style: TextStyle(color: AppColors.danger)),
+              ]),
+            ),
+          ],
+        ),
+      ],
+    ),
+  );
 
   Widget _buildHero() {
     final p        = _profile!;
     final username = p['username'] as String? ?? 'Player';
     final email    = p['email'] as String?;
     final initial  = username.isNotEmpty ? username[0].toUpperCase() : 'P';
+    final level    = _n(p['level']).toInt();
+    final coins    = _n(p['coins']).toInt();
+    final xp       = _n(p['xp']).toInt();
 
     return Container(
-      padding: const EdgeInsets.all(28),
+      padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(24),
         gradient: const LinearGradient(
@@ -143,31 +186,44 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
           end: Alignment.bottomRight,
           colors: [Color(0xFF0D2818), Color(0xFF0A1A30)],
         ),
-        border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
         boxShadow: [
-          BoxShadow(color: AppColors.primary.withValues(alpha: 0.08), blurRadius: 20, offset: const Offset(0, 6)),
+          BoxShadow(color: AppColors.primary.withValues(alpha: 0.1), blurRadius: 28, offset: const Offset(0, 8)),
         ],
       ),
       child: Column(
         children: [
-          // Avatar with animated glow
+          // Suit decoration row
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: const [
+              _SuitDot('♠', Colors.white70),
+              SizedBox(width: 10),
+              _SuitDot('♥', AppColors.suitRed),
+              SizedBox(width: 10),
+              _SuitDot('♦', AppColors.suitRed),
+              SizedBox(width: 10),
+              _SuitDot('♣', Colors.white70),
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          // Avatar with animated glow ring
           AnimatedBuilder(
             animation: _avatarGlow,
             builder: (_, child) => Container(
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: AppColors.primary.withValues(alpha: 0.2 + _avatarGlow.value * 0.3),
-                    blurRadius: 20 + _avatarGlow.value * 15,
-                    spreadRadius: 2,
-                  ),
-                ],
+                boxShadow: [BoxShadow(
+                  color: AppColors.primary.withValues(alpha: 0.2 + _avatarGlow.value * 0.3),
+                  blurRadius: 22 + _avatarGlow.value * 16,
+                  spreadRadius: 2,
+                )],
               ),
               child: ScaleTransition(
                 scale: _avatarScale,
                 child: Container(
-                  width: 90, height: 90,
+                  width: 88, height: 88,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     gradient: const LinearGradient(
@@ -177,35 +233,94 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
                     ),
                     border: Border.all(
                       color: AppColors.primary.withValues(alpha: 0.4 + _avatarGlow.value * 0.4),
-                      width: 2.5,
+                      width: 3,
                     ),
                   ),
                   child: Center(
                     child: Text(initial,
                         style: const TextStyle(color: Colors.white,
-                            fontSize: 36, fontWeight: FontWeight.bold)),
+                            fontSize: 34, fontWeight: FontWeight.bold)),
                   ),
                 ),
               ),
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 14),
+
           Text(username,
               style: const TextStyle(color: AppColors.textPrimary,
-                  fontWeight: FontWeight.bold, fontSize: 22)),
+                  fontWeight: FontWeight.w800, fontSize: 22, letterSpacing: 0.3)),
           if (email != null) ...[
-            const SizedBox(height: 4),
-            Text(email, style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+            const SizedBox(height: 3),
+            Text(email, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
           ],
           const SizedBox(height: 20),
 
-          // Level / Coins / XP chips
+          // Level / Coins / XP
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              _StatChip('⚡', 'Level', '${_n(p['level']).toInt()}', AppColors.accent),
-              _StatChip('💰', 'Coins', '${_n(p['coins']).toInt()}', AppColors.primary),
-              _StatChip('✨', 'XP',    '${_n(p['xp']).toInt()}',    AppColors.trump),
+              _StatChip('⚡', 'Level', '$level',  AppColors.accent),
+              _StatChip('💰', 'Coins', '$coins',  AppColors.primary),
+              _StatChip('✨', 'XP',    '$xp',     AppColors.trump),
+            ],
+          ),
+          const SizedBox(height: 20),
+
+          // XP progress bar
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('Level $level',
+                      style: const TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+                  AnimatedBuilder(
+                    animation: _xpCtrl,
+                    builder: (_, __) {
+                      final pct = Curves.easeOutCubic.transform(_xpCtrl.value) * _xpPct;
+                      return Text('${(pct * 100).toStringAsFixed(0)}%  →  Level ${level + 1}',
+                          style: const TextStyle(color: AppColors.accent,
+                              fontSize: 11, fontWeight: FontWeight.bold));
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 7),
+              Stack(
+                children: [
+                  Container(
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: AppColors.darkBorder,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ),
+                  AnimatedBuilder(
+                    animation: _xpCtrl,
+                    builder: (_, __) {
+                      final pct = Curves.easeOutCubic.transform(_xpCtrl.value) * _xpPct;
+                      return FractionallySizedBox(
+                        widthFactor: pct.clamp(0.01, 1.0),
+                        child: Container(
+                          height: 8,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(4),
+                            gradient: const LinearGradient(
+                              colors: [AppColors.primaryDark, AppColors.primary, AppColors.primaryLight],
+                            ),
+                            boxShadow: [BoxShadow(
+                              color: AppColors.primary.withValues(alpha: 0.6),
+                              blurRadius: 6,
+                            )],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
             ],
           ),
         ],
@@ -217,53 +332,123 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
     final p      = _profile!;
     final played = _n(p['matches_played']).toInt();
     final won    = _n(p['matches_won']).toInt();
-    final rate   = played > 0 ? (won / played * 100).toStringAsFixed(1) : '0';
+    final rate   = played > 0 ? (won / played * 100) : 0.0;
 
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: AppColors.darkSurface,
         borderRadius: BorderRadius.circular(20),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF0E1A2E), Color(0xFF0A1422)],
+        ),
         border: Border.all(color: AppColors.darkBorder),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 8, offset: const Offset(0, 4))],
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.25),
+            blurRadius: 12, offset: const Offset(0, 4))],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
-              Icon(Icons.bar_chart_rounded, color: AppColors.accent, size: 20),
-              SizedBox(width: 8),
-              Text('Statistics', style: TextStyle(color: AppColors.textPrimary,
-                  fontWeight: FontWeight.bold, fontSize: 17)),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppColors.accent.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(Icons.bar_chart_rounded, color: AppColors.accent, size: 18),
+              ),
+              const SizedBox(width: 12),
+              const Text('Statistics',
+                  style: TextStyle(color: AppColors.textPrimary,
+                      fontWeight: FontWeight.bold, fontSize: 17)),
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 18),
+
+          // Big 3 stats
           Row(
             children: [
               Expanded(child: _BigStat('Played', '$played', AppColors.textPrimary)),
+              Container(width: 1, height: 40, color: AppColors.darkBorder),
               Expanded(child: _BigStat('Won', '$won', AppColors.primary)),
-              Expanded(child: _BigStat('Win%', '$rate%', AppColors.accent)),
+              Container(width: 1, height: 40, color: AppColors.darkBorder),
+              Expanded(child: _BigStat('Win%', '${rate.toStringAsFixed(1)}%', AppColors.accent)),
             ],
           ),
           const SizedBox(height: 16),
-          const Divider(color: AppColors.darkBorder),
+
+          // Win rate bar
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Win Rate',
+                      style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                  Text('${rate.toStringAsFixed(1)}%',
+                      style: const TextStyle(color: AppColors.accent,
+                          fontWeight: FontWeight.bold, fontSize: 12)),
+                ],
+              ),
+              const SizedBox(height: 6),
+              TweenAnimationBuilder<double>(
+                tween: Tween(begin: 0, end: rate / 100),
+                duration: const Duration(milliseconds: 1200),
+                curve: Curves.easeOutCubic,
+                builder: (_, v, __) => Stack(
+                  children: [
+                    Container(height: 6, decoration: BoxDecoration(
+                      color: AppColors.darkBorder,
+                      borderRadius: BorderRadius.circular(3),
+                    )),
+                    FractionallySizedBox(
+                      widthFactor: v.clamp(0.0, 1.0),
+                      child: Container(height: 6, decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(3),
+                        gradient: const LinearGradient(
+                          colors: [AppColors.primaryDark, AppColors.accent],
+                        ),
+                      )),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          Divider(color: AppColors.darkBorder.withValues(alpha: 0.6)),
           const SizedBox(height: 12),
-          _statRow(Icons.scoreboard_rounded,     'Total Score', _n(p['total_score']).toStringAsFixed(1),  AppColors.primaryLight),
-          _statRow(Icons.check_circle_rounded,   'Exact Bids',  '${_n(p['bids_exact']).toInt()}',         AppColors.primary),
-          _statRow(Icons.cancel_rounded,         'Failed Bids', '${_n(p['bids_failed']).toInt()}',         AppColors.danger),
+          _statRow(Icons.scoreboard_rounded,   'Total Score',
+              _n(p['total_score']).toStringAsFixed(1),            AppColors.primaryLight),
+          _statRow(Icons.check_circle_rounded, 'Exact Bids',
+              '${_n(p['bids_exact']).toInt()}',                   AppColors.primary),
+          _statRow(Icons.cancel_rounded,       'Failed Bids',
+              '${_n(p['bids_failed']).toInt()}',                  AppColors.danger),
         ],
       ),
     );
   }
 
   Widget _statRow(IconData icon, String label, String value, Color color) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 6),
+    padding: const EdgeInsets.symmetric(vertical: 7),
     child: Row(
       children: [
-        Icon(icon, color: color, size: 16),
-        const SizedBox(width: 10),
-        Expanded(child: Text(label, style: const TextStyle(color: AppColors.textSecondary, fontSize: 14))),
+        Container(
+          width: 28, height: 28,
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(icon, color: color, size: 15),
+        ),
+        const SizedBox(width: 12),
+        Expanded(child: Text(label,
+            style: const TextStyle(color: AppColors.textSecondary, fontSize: 14))),
         Text(value, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 14)),
       ],
     ),
@@ -272,12 +457,20 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
   Widget _buildHistory() => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      const Row(
+      Row(
         children: [
-          Icon(Icons.history_rounded, color: AppColors.accent, size: 20),
-          SizedBox(width: 8),
-          Text('Match History', style: TextStyle(color: AppColors.textPrimary,
-              fontWeight: FontWeight.bold, fontSize: 17)),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppColors.accent.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(Icons.history_rounded, color: AppColors.accent, size: 18),
+          ),
+          const SizedBox(width: 12),
+          const Text('Match History',
+              style: TextStyle(color: AppColors.textPrimary,
+                  fontWeight: FontWeight.bold, fontSize: 17)),
         ],
       ),
       const SizedBox(height: 12),
@@ -285,8 +478,10 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
         Container(
           padding: const EdgeInsets.symmetric(vertical: 32),
           decoration: BoxDecoration(
-            color: AppColors.darkSurface,
             borderRadius: BorderRadius.circular(16),
+            gradient: const LinearGradient(
+              colors: [Color(0xFF0E1A2E), Color(0xFF0A1422)],
+            ),
             border: Border.all(color: AppColors.darkBorder),
           ),
           child: const Center(
@@ -294,7 +489,8 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
               children: [
                 Text('🃏', style: TextStyle(fontSize: 36)),
                 SizedBox(height: 10),
-                Text('No matches yet', style: TextStyle(color: AppColors.textSecondary)),
+                Text('No matches yet',
+                    style: TextStyle(color: AppColors.textSecondary)),
               ],
             ),
           ),
@@ -304,36 +500,48 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
           final m     = _history[i];
           final won   = m['winner_id'] != null;
           final score = _n(m['my_score']);
+          final color = won ? AppColors.primary : AppColors.danger;
+
           return TweenAnimationBuilder<double>(
             tween: Tween(begin: 0, end: 1),
             duration: Duration(milliseconds: 200 + i * 60),
             builder: (_, v, child) => Opacity(
               opacity: v,
-              child: Transform.translate(offset: Offset(0, 10 * (1 - v)), child: child),
+              child: Transform.translate(offset: Offset(0, 12 * (1 - v)), child: child),
             ),
             child: Container(
               margin: const EdgeInsets.only(bottom: 8),
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
-                color: AppColors.darkSurface,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: won ? AppColors.primary.withValues(alpha: 0.3) : AppColors.darkBorder,
+                borderRadius: BorderRadius.circular(14),
+                gradient: LinearGradient(
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
+                  colors: [
+                    color.withValues(alpha: 0.06),
+                    const Color(0xFF0A1422),
+                  ],
                 ),
+                border: Border.all(
+                  color: color.withValues(alpha: 0.3),
+                ),
+                boxShadow: [BoxShadow(
+                  color: color.withValues(alpha: 0.08),
+                  blurRadius: 8, offset: const Offset(0, 2),
+                )],
               ),
               child: Row(
                 children: [
                   Container(
-                    width: 40, height: 40,
+                    width: 44, height: 44,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: (won ? AppColors.primary : AppColors.danger).withValues(alpha: 0.12),
-                      border: Border.all(
-                        color: (won ? AppColors.primary : AppColors.danger).withValues(alpha: 0.3),
-                      ),
+                      color: color.withValues(alpha: 0.12),
+                      border: Border.all(color: color.withValues(alpha: 0.35)),
                     ),
                     child: Center(
-                      child: Text(won ? '🏆' : '💀', style: const TextStyle(fontSize: 18)),
+                      child: Text(won ? '🏆' : '💀',
+                          style: const TextStyle(fontSize: 20)),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -342,22 +550,30 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(won ? 'Victory' : 'Defeat',
-                            style: TextStyle(
-                              color: won ? AppColors.primary : AppColors.danger,
-                              fontWeight: FontWeight.bold,
-                            )),
+                            style: TextStyle(color: color,
+                                fontWeight: FontWeight.bold, fontSize: 15)),
                         Text('${m['round_count'] ?? 5} rounds',
-                            style: const TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+                            style: const TextStyle(
+                                color: AppColors.textSecondary, fontSize: 11)),
                       ],
                     ),
                   ),
-                  Text(
-                    score >= 0 ? '+${score.toStringAsFixed(1)}' : score.toStringAsFixed(1),
-                    style: TextStyle(
-                      color: score >= 0 ? AppColors.primaryLight : AppColors.danger,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        score >= 0
+                            ? '+${score.toStringAsFixed(1)}'
+                            : score.toStringAsFixed(1),
+                        style: TextStyle(
+                          color: score >= 0 ? AppColors.primaryLight : AppColors.danger,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 18,
+                        ),
+                      ),
+                      const Text('pts',
+                          style: TextStyle(color: AppColors.textMuted, fontSize: 10)),
+                    ],
                   ),
                 ],
               ),
@@ -368,7 +584,86 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
   );
 }
 
-// ── Big stat block ─────────────────────────────────────────────────────────
+// ── Animated gradient background ──────────────────────────────────────────────
+class _ProfileBg extends StatelessWidget {
+  final Animation<double> anim;
+  const _ProfileBg({required this.anim});
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: anim,
+    builder: (_, __) {
+      final t = anim.value;
+      return Stack(
+        children: [
+          Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topRight,
+                end: Alignment.bottomLeft,
+                colors: [Color(0xFF060C1A), Color(0xFF0B1829), Color(0xFF060E18)],
+              ),
+            ),
+          ),
+          Positioned(
+            right: -80, top: -80,
+            child: Container(
+              width: 340, height: 340,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: RadialGradient(colors: [
+                  AppColors.primary.withValues(alpha: 0.08 + t * 0.06),
+                  Colors.transparent,
+                ]),
+              ),
+            ),
+          ),
+          Positioned(
+            left: -60, bottom: 180,
+            child: Container(
+              width: 280, height: 280,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: RadialGradient(colors: [
+                  AppColors.accent.withValues(alpha: 0.04 + t * 0.04),
+                  Colors.transparent,
+                ]),
+              ),
+            ),
+          ),
+          Positioned(
+            right: 20, bottom: -40,
+            child: Container(
+              width: 200, height: 200,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: RadialGradient(colors: [
+                  AppColors.trump.withValues(alpha: 0.03 + t * 0.03),
+                  Colors.transparent,
+                ]),
+              ),
+            ),
+          ),
+        ],
+      );
+    },
+  );
+}
+
+// ── Suit decoration dot ────────────────────────────────────────────────────────
+class _SuitDot extends StatelessWidget {
+  final String suit;
+  final Color color;
+  const _SuitDot(this.suit, this.color);
+
+  @override
+  Widget build(BuildContext context) => Text(
+    suit,
+    style: TextStyle(color: color.withValues(alpha: 0.55), fontSize: 16),
+  );
+}
+
+// ── Big stat block ─────────────────────────────────────────────────────────────
 class _BigStat extends StatelessWidget {
   final String label, value;
   final Color color;
@@ -377,14 +672,27 @@ class _BigStat extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Column(
     children: [
-      Text(value, style: TextStyle(color: color, fontSize: 28, fontWeight: FontWeight.w900)),
+      TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0, end: 1),
+        duration: const Duration(milliseconds: 800),
+        curve: Curves.easeOut,
+        builder: (_, v, __) => Opacity(
+          opacity: v,
+          child: Transform.translate(
+            offset: Offset(0, 10 * (1 - v)),
+            child: Text(value,
+                style: TextStyle(color: color,
+                    fontSize: 26, fontWeight: FontWeight.w900)),
+          ),
+        ),
+      ),
       const SizedBox(height: 2),
       Text(label, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
     ],
   );
 }
 
-// ── Stat chip ──────────────────────────────────────────────────────────────
+// ── Stat chip ──────────────────────────────────────────────────────────────────
 class _StatChip extends StatelessWidget {
   final String emoji, label, value;
   final Color color;
@@ -397,13 +705,20 @@ class _StatChip extends StatelessWidget {
       color: color.withValues(alpha: 0.08),
       borderRadius: BorderRadius.circular(14),
       border: Border.all(color: color.withValues(alpha: 0.25)),
+      boxShadow: [BoxShadow(
+        color: color.withValues(alpha: 0.08),
+        blurRadius: 8,
+      )],
     ),
     child: Column(
       children: [
         Text(emoji, style: const TextStyle(fontSize: 18)),
         const SizedBox(height: 4),
-        Text(value, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 16)),
-        Text(label, style: const TextStyle(color: AppColors.textSecondary, fontSize: 10)),
+        Text(value,
+            style: TextStyle(color: color,
+                fontWeight: FontWeight.bold, fontSize: 16)),
+        Text(label,
+            style: const TextStyle(color: AppColors.textSecondary, fontSize: 10)),
       ],
     ),
   );

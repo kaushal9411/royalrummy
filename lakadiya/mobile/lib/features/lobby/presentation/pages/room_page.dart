@@ -88,8 +88,13 @@ class _RoomPageState extends State<RoomPage> with TickerProviderStateMixin {
   Widget build(BuildContext context) {
     if (_room == null) {
       return Scaffold(
-        backgroundColor: AppColors.darkBg,
-        body: const Center(child: CircularProgressIndicator(color: AppColors.primary)),
+        backgroundColor: Colors.transparent,
+        body: Stack(
+          children: [
+            _RoomBg(anim: _pulseAnim),
+            const Center(child: CircularProgressIndicator(color: AppColors.primary)),
+          ],
+        ),
       );
     }
 
@@ -98,9 +103,10 @@ class _RoomPageState extends State<RoomPage> with TickerProviderStateMixin {
     final isHost  = _isHost;
 
     return Scaffold(
-      backgroundColor: AppColors.darkBg,
+      backgroundColor: Colors.transparent,
       appBar: AppBar(
-        backgroundColor: AppColors.darkSurface,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, color: AppColors.textPrimary, size: 20),
           onPressed: () => context.go('/lobby'),
@@ -115,7 +121,10 @@ class _RoomPageState extends State<RoomPage> with TickerProviderStateMixin {
           ),
         ],
       ),
-      body: FadeTransition(
+      body: Stack(
+        children: [
+          _RoomBg(anim: _pulseAnim),
+          FadeTransition(
         opacity: _fadeIn,
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(16),
@@ -192,6 +201,8 @@ class _RoomPageState extends State<RoomPage> with TickerProviderStateMixin {
           ),
         ),
       ),
+    ],
+  ),
     );
   }
 
@@ -345,6 +356,59 @@ class _RoomPageState extends State<RoomPage> with TickerProviderStateMixin {
       ),
     );
   }
+}
+
+// ── Animated gradient background ───────────────────────────────────────────────
+class _RoomBg extends StatelessWidget {
+  final Animation<double> anim;
+  const _RoomBg({required this.anim});
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: anim,
+    builder: (_, __) {
+      final t = anim.value;
+      return Stack(
+        children: [
+          Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF060C1A), Color(0xFF0B1829), Color(0xFF060E18)],
+              ),
+            ),
+          ),
+          Positioned(
+            right: -60, top: -60,
+            child: Container(
+              width: 300, height: 300,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: RadialGradient(colors: [
+                  AppColors.accent.withValues(alpha: 0.06 + t * 0.05),
+                  Colors.transparent,
+                ]),
+              ),
+            ),
+          ),
+          Positioned(
+            left: -80, bottom: 120,
+            child: Container(
+              width: 280, height: 280,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: RadialGradient(colors: [
+                  AppColors.primary.withValues(alpha: 0.05 + t * 0.05),
+                  Colors.transparent,
+                ]),
+              ),
+            ),
+          ),
+        ],
+      );
+    },
+  );
 }
 
 // ── Animated player slot ───────────────────────────────────────────────────
