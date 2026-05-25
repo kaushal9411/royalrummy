@@ -181,7 +181,20 @@ class GameResultData {
   final int winnerSeat;
   final String winnerName;
   final Map<int, double> finalScores;
-  GameResultData(this.winnerSeat, this.winnerName, this.finalScores);
+  final double betAmount;
+  final double totalPot;
+  final String? winnerUserId;
+
+  GameResultData(
+    this.winnerSeat,
+    this.winnerName,
+    this.finalScores, {
+    this.betAmount   = 0,
+    this.totalPot    = 0,
+    this.winnerUserId,
+  });
+
+  bool get hasBet => betAmount > 0;
 }
 
 // ─── BLoC ─────────────────────────────────────────────────────────────────────
@@ -367,10 +380,20 @@ class GameBloc extends Bloc<GameEvent, GameState> {
     final d = event.data;
     final rawScores = (d['finalScores'] as Map<String, dynamic>?) ?? {};
     final scores = rawScores.map((k, v) => MapEntry(int.parse(k), (v as num).toDouble()));
+
+    // Parse optional bet result
+    final betRaw   = d['betResult'] as Map?;
+    final betAmount  = (betRaw?['betAmount']  as num?)?.toDouble() ?? 0.0;
+    final totalPot   = (betRaw?['totalPot']   as num?)?.toDouble() ?? 0.0;
+    final winnerUid  = betRaw?['winnerUserId'] as String?;
+
     final gr = GameResultData(
       (d['winnerSeat'] as num).toInt(),
       d['winnerName'] as String? ?? '',
       scores,
+      betAmount:    betAmount,
+      totalPot:     totalPot,
+      winnerUserId: winnerUid,
     );
     final s = (state as GameInProgress).state;
     emit(GameInProgress(

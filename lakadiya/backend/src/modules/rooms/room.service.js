@@ -1,10 +1,33 @@
 const { query, getClient } = require('../../config/database');
 const { v4: uuidv4 } = require('uuid');
 
+const VALID_BET_AMOUNTS = [0, 10, 25, 50, 100];
+
+const _getUserBalance = async (userId) => {
+  const r = await query(
+    `SELECT COALESCE(
+       SUM(CASE WHEN type IN ('add','bet_win')        AND status='success' THEN amount ELSE 0 END) -
+       SUM(CASE WHEN type IN ('withdraw','bet_deduct') AND status='success' THEN amount ELSE 0 END),
+     0)::float AS balance
+     FROM payment_transactions WHERE user_id = $1`,
+    [userId]
+  );
+  return parseFloat(r.rows[0]?.balance) || 0;
+};
+
 const generateCode = () =>
   Math.random().toString(36).substring(2, 8).toUpperCase();
 
-const createRoom = async (hostId, isPrivate = false) => {
+const createRoom = async (hostId, isPrivate = false, betAmount = 0) => {
+  const safeBet = VALID_BET_AMOUNTS.includes(Number(betAmount)) ? Number(betAmount) : 0;
+
+  // If paid room, validate host's wallet balance
+  if (safeBet > 0) {
+    const balance = await _getUserBalance(hostId);
+    if (balance <= 100) throw { status: 400, message: 'You need a wallet balance above ₹100 to create a bet game' };
+    if (balance < safeBet) throw { status: 400, message: `Insufficient wallet balance to create a ₹${safeBet} bet game` };
+  }
+
   let code;
   let attempts = 0;
   do {
@@ -15,9 +38,9 @@ const createRoom = async (hostId, isPrivate = false) => {
   } while (attempts < 10);
 
   const result = await query(
-    `INSERT INTO rooms (code, host_id, is_private) VALUES ($1, $2, $3)
-     RETURNING id, code, host_id, status, is_private, created_at`,
-    [code, hostId, isPrivate]
+    `INSERT INTO rooms (code, host_id, is_private, bet_amount) VALUES ($1, $2, $3, $4)
+     RETURNING id, code, host_id, status, is_private, bet_amount, created_at`,
+    [code, hostId, isPrivate, safeBet]
   );
   const room = result.rows[0];
 
@@ -30,13 +53,21 @@ const createRoom = async (hostId, isPrivate = false) => {
 
 const joinRoom = async (userId, code) => {
   const roomResult = await query(
-    'SELECT id, status FROM rooms WHERE code = $1',
+    'SELECT id, status, bet_amount FROM rooms WHERE code = $1',
     [code.toUpperCase()]
   );
   if (!roomResult.rows.length) throw { status: 404, message: 'Room not found' };
 
   const room = roomResult.rows[0];
   if (room.status !== 'waiting') throw { status: 400, message: 'Room not accepting players' };
+
+  // Wallet check for paid rooms
+  const betAmount = parseFloat(room.bet_amount) || 0;
+  if (betAmount > 0) {
+    const balance = await _getUserBalance(userId);
+    if (balance <= 100) throw { status: 400, message: 'You need a wallet balance above ₹100 to join this bet game' };
+    if (balance < betAmount) throw { status: 400, message: `Insufficient wallet balance. Need ₹${betAmount} to join this game` };
+  }
 
   const players = await query(
     'SELECT seat, user_id FROM room_players WHERE room_id = $1',
@@ -60,7 +91,7 @@ const joinRoom = async (userId, code) => {
 
 const getRoomDetails = async (roomId) => {
   const room = await query(
-    `SELECT r.id, r.code, r.status, r.is_private, r.host_id,
+    `SELECT r.id, r.code, r.status, r.is_private, r.bet_amount, r.host_id,
             u.username AS host_name
      FROM rooms r JOIN users u ON u.id = r.host_id
      WHERE r.id = $1`,
@@ -124,7 +155,7 @@ const addBot = async (hostId, roomId, botLevel = 'medium') => {
 
 const getPublicRooms = async () => {
   const result = await query(
-    `SELECT r.id, r.code, r.status,
+    `SELECT r.id, r.code, r.status, r.bet_amount,
             u.username AS host_name,
             COUNT(rp.seat) AS player_count
      FROM rooms r

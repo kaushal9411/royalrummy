@@ -171,6 +171,16 @@ const getPaymentStats = async (req, res, next) => {
   }
 };
 
+const getGameBets = async (req, res, next) => {
+  try {
+    const { status, limit = 50, offset = 0 } = req.query;
+    const bets = await paymentService.getAllGameBets(status, Number(limit), Number(offset));
+    res.json(bets);
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   initiateAddMoney,
   verifyPayment,
@@ -183,4 +193,5 @@ module.exports = {
   approveWithdrawal,
   rejectWithdrawal,
   getPaymentStats,
+  getGameBets,
 };

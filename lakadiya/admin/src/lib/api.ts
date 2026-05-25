@@ -86,12 +86,31 @@ export interface Analytics {
 // ─── Payment types & calls ────────────────────────────────────────────────────
 
 export interface PaymentStats {
-  total_revenue:   number;
-  total_withdrawn: number;
-  pending_amount:  number;
-  pending_count:   number;
-  total_add_count: number;
-  today_revenue:   number;
+  total_revenue:      number;
+  total_withdrawn:    number;
+  pending_amount:     number;
+  pending_count:      number;
+  total_add_count:    number;
+  today_revenue:      number;
+  total_bet_payouts:  number;
+  total_bet_escrowed: number;
+  total_bet_games:    number;
+  today_bet_volume:   number;
+}
+
+export interface GameBet {
+  id: string;
+  room_id: string;
+  match_id: string | null;
+  seat: number;
+  amount: number;
+  status: string;   // escrowed | won | lost | refunded
+  created_at: string;
+  settled_at: string | null;
+  username: string;
+  email: string;
+  room_code: string;
+  room_bet_amount: number;
 }
 
 export interface AdminTransaction {
@@ -116,6 +135,13 @@ export const getAdminWithdrawals = async (params?: {
   status?: string; limit?: number; offset?: number;
 }): Promise<AdminTransaction[]> => {
   const res = await api.get('/payments/admin/withdrawals', { params });
+  return res.data;
+};
+
+export const getAdminGameBets = async (params?: {
+  status?: string; limit?: number; offset?: number;
+}): Promise<GameBet[]> => {
+  const res = await api.get('/payments/admin/bets', { params });
   return res.data;
 };
 

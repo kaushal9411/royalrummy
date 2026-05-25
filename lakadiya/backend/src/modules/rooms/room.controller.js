@@ -2,7 +2,7 @@ const roomService = require('./room.service');
 
 const createRoom = async (req, res, next) => {
   try {
-    const room = await roomService.createRoom(req.user.id, req.body.isPrivate);
+    const room = await roomService.createRoom(req.user.id, req.body.isPrivate, req.body.betAmount ?? 0);
     res.status(201).json(room);
   } catch (err) { next(err); }
 };

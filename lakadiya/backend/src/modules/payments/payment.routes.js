@@ -27,6 +27,7 @@ router.post('/withdraw', paymentController.requestWithdrawal);
 
 // Admin routes (require admin auth)
 router.get('/admin/stats',        authenticateAdmin, paymentController.getPaymentStats);
+router.get('/admin/bets',         authenticateAdmin, paymentController.getGameBets);
 router.get('/admin/transactions', authenticateAdmin, paymentController.getAllUserTransactions);
 router.get('/admin/withdrawals',  authenticateAdmin, paymentController.getAllWithdrawalRequests);
 router.patch('/admin/withdrawals/:transactionId/approve', authenticateAdmin, paymentController.approveWithdrawal);

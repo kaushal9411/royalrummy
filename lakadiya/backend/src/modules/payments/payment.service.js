@@ -1,6 +1,6 @@
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
-const { query } = require('../../config/database');
+const { query, getClient } = require('../../config/database');
 const logger = require('../../config/logger');
 
 const razorpay = new Razorpay({
@@ -165,9 +165,9 @@ const getWalletBalance = async (userId) => {
     const userCoins = user.coins || 0;
 
     const statsResult = await query(
-      `SELECT 
-         COALESCE(SUM(CASE WHEN type = 'add' AND status = 'success' THEN amount ELSE 0 END), 0) as total_added,
-         COALESCE(SUM(CASE WHEN type = 'withdraw' AND status = 'success' THEN amount ELSE 0 END), 0) as total_withdrawn
+      `SELECT
+         COALESCE(SUM(CASE WHEN type IN ('add', 'bet_win')      AND status = 'success' THEN amount ELSE 0 END), 0) as total_added,
+         COALESCE(SUM(CASE WHEN type IN ('withdraw', 'bet_deduct') AND status = 'success' THEN amount ELSE 0 END), 0) as total_withdrawn
        FROM payment_transactions
        WHERE user_id = $1`,
       [userId]
@@ -404,6 +404,33 @@ const rejectWithdrawal = async (transactionId, reason) => {
   }
 };
 
+const getAllGameBets = async (status, limit = 50, offset = 0) => {
+  try {
+    let q = `
+      SELECT gb.id, gb.room_id, gb.match_id, gb.seat, gb.amount, gb.status,
+             gb.created_at, gb.settled_at,
+             u.username, u.email,
+             r.code AS room_code, r.bet_amount AS room_bet_amount
+      FROM game_bets gb
+      JOIN users u ON u.id = gb.user_id
+      JOIN rooms r ON r.id = gb.room_id
+    `;
+    const params = [];
+    if (status) {
+      q += ` WHERE gb.status = $${params.length + 1}`;
+      params.push(status);
+    }
+    q += ` ORDER BY gb.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    params.push(limit, offset);
+
+    const result = await query(q, params);
+    return result.rows;
+  } catch (err) {
+    console.error('[Payment Admin Error] getAllGameBets failed:', err);
+    throw { status: 500, message: 'Failed to get game bets', error: err.message };
+  }
+};
+
 const getPaymentStats = async () => {
   try {
     const result = await query(`
@@ -414,7 +441,12 @@ const getPaymentStats = async () => {
         COUNT(CASE WHEN type = 'withdraw' AND status = 'pending'  THEN 1 END)::int                          AS pending_count,
         COUNT(CASE WHEN type = 'add'      AND status = 'success'  THEN 1 END)::int                          AS total_add_count,
         COALESCE(SUM(CASE WHEN type = 'add' AND status = 'success'
-                          AND created_at >= CURRENT_DATE THEN amount ELSE 0 END), 0)::float                 AS today_revenue
+                          AND created_at >= CURRENT_DATE THEN amount ELSE 0 END), 0)::float                 AS today_revenue,
+        COALESCE(SUM(CASE WHEN type = 'bet_win'    AND status = 'success' THEN amount ELSE 0 END), 0)::float AS total_bet_payouts,
+        COALESCE(SUM(CASE WHEN type = 'bet_deduct' AND status = 'success' THEN amount ELSE 0 END), 0)::float AS total_bet_escrowed,
+        COUNT(CASE WHEN type = 'bet_win' AND status = 'success' THEN 1 END)::int AS total_bet_games,
+        COALESCE(SUM(CASE WHEN type = 'bet_deduct' AND status = 'success'
+                          AND created_at >= CURRENT_DATE THEN amount ELSE 0 END), 0)::float AS today_bet_volume
       FROM payment_transactions
     `);
     return result.rows[0];
@@ -424,10 +456,168 @@ const getPaymentStats = async () => {
   }
 };
 
+// ─── Bet helpers ──────────────────────────────────────────────────────────────
+
+const getUserBalance = async (userId) => {
+  const result = await query(
+    `SELECT COALESCE(
+       SUM(CASE WHEN type IN ('add','bet_win')        AND status='success' THEN amount ELSE 0 END) -
+       SUM(CASE WHEN type IN ('withdraw','bet_deduct') AND status='success' THEN amount ELSE 0 END),
+     0)::float AS balance
+     FROM payment_transactions WHERE user_id = $1`,
+    [userId]
+  );
+  return parseFloat(result.rows[0]?.balance) || 0;
+};
+
+const escrowBets = async (roomId, matchId) => {
+  const roomResult = await query('SELECT bet_amount FROM rooms WHERE id = $1', [roomId]);
+  if (!roomResult.rows.length) throw { status: 404, message: 'Room not found' };
+
+  const betAmount = parseFloat(roomResult.rows[0].bet_amount) || 0;
+  if (betAmount <= 0) return { betAmount: 0, totalPot: 0, players: [] };
+
+  const playersResult = await query(
+    `SELECT rp.seat, rp.user_id
+     FROM room_players rp
+     WHERE rp.room_id = $1 AND rp.is_bot = FALSE`,
+    [roomId]
+  );
+  const realPlayers = playersResult.rows;
+  if (realPlayers.length < 2) return { betAmount: 0, totalPot: 0, players: [] };
+
+  // Validate balances before touching any account
+  for (const p of realPlayers) {
+    const balance = await getUserBalance(p.user_id);
+    if (balance <= 100) throw { status: 400, message: 'All players must have a wallet balance above ₹100 to play a bet game' };
+    if (balance < betAmount) throw { status: 400, message: `A player has insufficient wallet balance for this bet (need ₹${betAmount})` };
+  }
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    for (const p of realPlayers) {
+      const coins = Math.floor(betAmount * COINS_PER_RUPEE);
+      await client.query(
+        `INSERT INTO payment_transactions (user_id, amount, coins, type, status, description, metadata)
+         VALUES ($1, $2, $3, 'bet_deduct', 'success', 'Bet escrowed for game', $4)`,
+        [p.user_id, betAmount, coins, JSON.stringify({ room_id: roomId, match_id: matchId })]
+      );
+      await client.query(
+        `UPDATE users SET coins = GREATEST(coins - $1, 0) WHERE id = $2`,
+        [coins, p.user_id]
+      );
+      await client.query(
+        `INSERT INTO game_bets (room_id, match_id, user_id, seat, amount, status)
+         VALUES ($1, $2, $3, $4, $5, 'escrowed')
+         ON CONFLICT (room_id, user_id) DO UPDATE SET match_id=$2, amount=$5, status='escrowed', settled_at=NULL`,
+        [roomId, matchId, p.user_id, p.seat, betAmount]
+      );
+    }
+    await client.query('COMMIT');
+    return { betAmount, totalPot: betAmount * realPlayers.length, players: realPlayers };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
+const payoutWinner = async (roomId, matchId, winnerUserId) => {
+  const roomResult = await query('SELECT bet_amount FROM rooms WHERE id = $1', [roomId]);
+  if (!roomResult.rows.length) return null;
+
+  const betAmount = parseFloat(roomResult.rows[0].bet_amount) || 0;
+  if (betAmount <= 0) return null;
+
+  const betsResult = await query(
+    `SELECT user_id, amount, seat FROM game_bets
+     WHERE room_id = $1 AND status = 'escrowed'`,
+    [roomId]
+  );
+  if (!betsResult.rows.length) return null;
+
+  const totalPot = betsResult.rows.reduce((s, b) => s + parseFloat(b.amount), 0);
+  const winCoins = Math.floor(totalPot * COINS_PER_RUPEE);
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+
+    // Credit winner
+    await client.query(
+      `INSERT INTO payment_transactions (user_id, amount, coins, type, status, description, metadata)
+       VALUES ($1, $2, $3, 'bet_win', 'success', 'Game bet winnings', $4)`,
+      [winnerUserId, totalPot, winCoins, JSON.stringify({ room_id: roomId, match_id: matchId })]
+    );
+    await client.query(
+      `UPDATE users SET coins = coins + $1 WHERE id = $2`,
+      [winCoins, winnerUserId]
+    );
+
+    // Mark all bets settled
+    for (const bet of betsResult.rows) {
+      const isWinner = bet.user_id === winnerUserId;
+      await client.query(
+        `UPDATE game_bets SET status=$1, settled_at=NOW()
+         WHERE room_id=$2 AND user_id=$3`,
+        [isWinner ? 'won' : 'lost', roomId, bet.user_id]
+      );
+    }
+
+    await client.query('COMMIT');
+    return { betAmount, totalPot, winnerUserId, playerCount: betsResult.rows.length };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
+const refundBets = async (roomId) => {
+  const betsResult = await query(
+    `SELECT user_id, amount FROM game_bets WHERE room_id=$1 AND status='escrowed'`,
+    [roomId]
+  );
+  if (!betsResult.rows.length) return;
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    for (const bet of betsResult.rows) {
+      const betAmount = parseFloat(bet.amount);
+      const coins = Math.floor(betAmount * COINS_PER_RUPEE);
+      await client.query(
+        `INSERT INTO payment_transactions (user_id, amount, coins, type, status, description, metadata)
+         VALUES ($1, $2, $3, 'bet_win', 'success', 'Bet refunded (game cancelled)', $4)`,
+        [bet.user_id, betAmount, coins, JSON.stringify({ room_id: roomId, refund: true })]
+      );
+      await client.query(
+        `UPDATE users SET coins = coins + $1 WHERE id = $2`,
+        [coins, bet.user_id]
+      );
+      await client.query(
+        `UPDATE game_bets SET status='refunded', settled_at=NOW()
+         WHERE room_id=$1 AND user_id=$2`,
+        [roomId, bet.user_id]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   createPaymentOrder,
   verifyPayment,
   getWalletBalance,
+  getUserBalance,
   getTransactionHistory,
   getWithdrawalRequests,
   requestWithdrawal,
@@ -436,5 +626,9 @@ module.exports = {
   approveWithdrawal,
   rejectWithdrawal,
   getPaymentStats,
+  escrowBets,
+  payoutWinner,
+  refundBets,
+  getAllGameBets,
   COINS_PER_RUPEE,
 };

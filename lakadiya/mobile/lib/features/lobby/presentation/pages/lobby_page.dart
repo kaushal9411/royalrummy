@@ -50,10 +50,25 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
     } catch (_) {}
   }
 
-  Future<void> _createRoom({bool isPrivate = false}) async {
+  void _showBetPicker({required bool isPrivate}) {
+    if (_loading) return;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => _BetPickerSheet(
+        onPicked: (betAmount) {
+          Navigator.pop(context);
+          _createRoom(isPrivate: isPrivate, betAmount: betAmount);
+        },
+      ),
+    );
+  }
+
+  Future<void> _createRoom({bool isPrivate = false, double betAmount = 0}) async {
     setState(() => _loading = true);
     try {
-      final room = await _repo.createRoom(isPrivate: isPrivate);
+      final room = await _repo.createRoom(isPrivate: isPrivate, betAmount: betAmount);
       if (mounted) {
         context.read<GameBloc>().add(GameJoinRoom(room['id'] as String, 0));
         context.go('/room/${room['id']}');
@@ -184,13 +199,13 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
                       Expanded(child: _ActionCard(
                         suit: '♠', label: 'Create Room', subtitle: 'Public game',
                         colors: const [Color(0xFF00C853), Color(0xFF007E33)],
-                        onTap: _loading ? null : () => _createRoom(),
+                        onTap: _loading ? null : () => _showBetPicker(isPrivate: false),
                       )),
                       const SizedBox(width: 12),
                       Expanded(child: _ActionCard(
                         suit: '♦', label: 'Private Room', subtitle: 'Invite only',
                         colors: const [Color(0xFFFFD600), Color(0xFFC79E00)],
-                        onTap: _loading ? null : () => _createRoom(isPrivate: true),
+                        onTap: _loading ? null : () => _showBetPicker(isPrivate: true),
                       )),
                     ]),
                     const SizedBox(height: 16),
@@ -719,6 +734,132 @@ class _PlayNowCardState extends State<_PlayNowCard>
   }
 }
 
+// ── Bet amount picker bottom sheet ───────────────────────────────────────────
+class _BetPickerSheet extends StatelessWidget {
+  final void Function(double) onPicked;
+  const _BetPickerSheet({required this.onPicked});
+
+  static const _bets = [
+    {'amount': 0.0,    'label': 'Free',   'sub': 'No real money',         'icon': '🆓', 'color': AppColors.textSecondary},
+    {'amount': 10.0,   'label': '₹10',    'sub': 'Pot: ₹40 for winner',   'icon': '💰', 'color': AppColors.primary},
+    {'amount': 25.0,   'label': '₹25',    'sub': 'Pot: ₹100 for winner',  'icon': '💎', 'color': AppColors.accent},
+    {'amount': 50.0,   'label': '₹50',    'sub': 'Pot: ₹200 for winner',  'icon': '🔥', 'color': Color(0xFFFF7043)},
+    {'amount': 100.0,  'label': '₹100',   'sub': 'Pot: ₹400 for winner',  'icon': '👑', 'color': Color(0xFFFFD700)},
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter, end: Alignment.bottomCenter,
+          colors: [Color(0xFF0E1A2C), Color(0xFF080F18)],
+        ),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        border: Border(
+          top:   BorderSide(color: Color(0xFF1E3050)),
+          left:  BorderSide(color: Color(0xFF1E3050)),
+          right: BorderSide(color: Color(0xFF1E3050)),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(width: 40, height: 4,
+              decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2))),
+          const SizedBox(height: 22),
+          Row(children: [
+            Container(
+              padding: const EdgeInsets.all(9),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(colors: [AppColors.accent, Color(0xFFC79E00)]),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.monetization_on_rounded, color: Colors.white, size: 20),
+            ),
+            const SizedBox(width: 14),
+            const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Set Bet Amount',
+                  style: TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w800, fontSize: 18)),
+              Text('Requires wallet balance > ₹100',
+                  style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+            ]),
+          ]),
+          const SizedBox(height: 20),
+          ..._bets.map((b) => Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: _BetOption(
+              label:  b['label'] as String,
+              sub:    b['sub']   as String,
+              icon:   b['icon']  as String,
+              color:  b['color'] as Color,
+              onTap:  () => onPicked(b['amount'] as double),
+            ),
+          )),
+        ],
+      ),
+    );
+  }
+}
+
+class _BetOption extends StatefulWidget {
+  final String label, sub, icon;
+  final Color color;
+  final VoidCallback onTap;
+  const _BetOption({required this.label, required this.sub, required this.icon, required this.color, required this.onTap});
+  @override
+  State<_BetOption> createState() => _BetOptionState();
+}
+
+class _BetOptionState extends State<_BetOption> with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _scale;
+  @override
+  void initState() {
+    super.initState();
+    _ctrl  = AnimationController(vsync: this, duration: const Duration(milliseconds: 100));
+    _scale = Tween(begin: 1.0, end: 0.96).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+  }
+  @override
+  void dispose() { _ctrl.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    onTapDown:   (_) => _ctrl.forward(),
+    onTapUp:     (_) { _ctrl.reverse(); widget.onTap(); },
+    onTapCancel: ()  => _ctrl.reverse(),
+    child: ScaleTransition(
+      scale: _scale,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          gradient: LinearGradient(
+            begin: Alignment.centerLeft, end: Alignment.centerRight,
+            colors: [widget.color.withValues(alpha: 0.12), const Color(0xFF0A1422)],
+          ),
+          border: Border.all(color: widget.color.withValues(alpha: 0.35)),
+        ),
+        child: Row(children: [
+          Text(widget.icon, style: const TextStyle(fontSize: 24)),
+          const SizedBox(width: 14),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(widget.label, style: TextStyle(color: widget.color, fontWeight: FontWeight.bold, fontSize: 16)),
+            const SizedBox(height: 2),
+            Text(widget.sub, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+          ])),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(color: widget.color.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(10)),
+            child: Icon(Icons.arrow_forward_ios_rounded, color: widget.color, size: 14),
+          ),
+        ]),
+      ),
+    ),
+  );
+}
+
 // ── Level picker bottom sheet ────────────────────────────────────────────────
 class _LevelPickerSheet extends StatelessWidget {
   final void Function(String) onPicked;
@@ -922,9 +1063,10 @@ class _RoomCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final count  = (num.tryParse(room['player_count']?.toString() ?? '') ?? 0).toInt();
-    final isFull = count >= 4;
-    final host   = room['host_name'] as String? ?? 'Room';
+    final count     = (num.tryParse(room['player_count']?.toString() ?? '') ?? 0).toInt();
+    final isFull    = count >= 4;
+    final host      = room['host_name'] as String? ?? 'Room';
+    final betAmount = (num.tryParse(room['bet_amount']?.toString() ?? '') ?? 0).toDouble();
 
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
@@ -991,6 +1133,19 @@ class _RoomCard extends StatelessWidget {
                 child: Text(isFull ? 'Full' : 'Open',
                     style: TextStyle(color: isFull ? AppColors.danger : AppColors.primary, fontSize: 10, fontWeight: FontWeight.bold)),
               ),
+              if (betAmount > 0) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: AppColors.accent.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: AppColors.accent.withValues(alpha: 0.3)),
+                  ),
+                  child: Text('₹${betAmount.toInt()}',
+                      style: const TextStyle(color: AppColors.accent, fontSize: 10, fontWeight: FontWeight.bold)),
+                ),
+              ],
             ]),
           ])),
           GestureDetector(

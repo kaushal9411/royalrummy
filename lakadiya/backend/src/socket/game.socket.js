@@ -4,6 +4,7 @@ const { query } = require('../config/database');
 const engine = require('../modules/game/game.engine');
 const scoreEngine = require('../modules/game/score.engine');
 const { getBotBid, getBotCard } = require('../modules/game/ai.bot');
+const paymentService = require('../modules/payments/payment.service');
 const logger = require('../config/logger');
 
 // In-memory store of active game states keyed by roomId
@@ -163,11 +164,24 @@ async function handleGameEnd(io, roomId, state) {
     await scoreEngine.updatePlayerStats(state.players, state.scores, winnerSeat);
   }
 
+  // Settle bets — only if real winner has a userId (not a bot)
+  let betResult = null;
+  if (state.matchId && winner.userId && !winner.isBot) {
+    try {
+      betResult = await paymentService.payoutWinner(roomId, state.matchId, winner.userId);
+    } catch (err) {
+      logger.error('Bet payout failed', err);
+    }
+  }
+
   io.to(roomId).emit('game_result', {
     winnerSeat,
     winnerName:  winner.username,
     finalScores: state.scores,
     roundScores: state.roundScores,
+    betResult:   betResult
+      ? { betAmount: betResult.betAmount, totalPot: betResult.totalPot, winnerUserId: betResult.winnerUserId }
+      : null,
   });
 
   await query(`UPDATE rooms SET status = 'finished' WHERE id = $1`, [roomId]);
@@ -217,13 +231,25 @@ function registerGameSocket(io, socket) {
       if (players.length !== 4) return socket.emit('error', { message: 'Need exactly 4 players' });
 
       const matchId = await scoreEngine.createMatch(roomId);
+
+      // Escrow bets from real players (fails fast if any player has insufficient balance)
+      let betInfo = { betAmount: 0, totalPot: 0 };
+      try {
+        betInfo = await paymentService.escrowBets(roomId, matchId);
+      } catch (betErr) {
+        return socket.emit('error', { message: betErr.message || 'Failed to escrow bets' });
+      }
+
       const state = engine.createGameState(roomId, players);
-      state.matchId = matchId;
+      state.matchId  = matchId;
+      state.betAmount = betInfo.betAmount;
       engine.startRound(state);
       gameStates.set(roomId, state);
 
       io.to(roomId).emit('game_started', {
         matchId,
+        betAmount: betInfo.betAmount,
+        totalPot:  betInfo.totalPot,
         round:   state.round,
         players: players.map((p) => ({
           seat:     p.seat,
@@ -402,6 +428,12 @@ function registerGameSocket(io, socket) {
     userSockets.delete(userId);
     if (socket.roomId) {
       io.to(socket.roomId).emit('player_disconnected', { userId, username: socket.username });
+      // If game was never started (no active state), refund any escrowed bets
+      if (!gameStates.has(socket.roomId)) {
+        paymentService.refundBets(socket.roomId).catch((e) =>
+          logger.error('Bet refund on disconnect failed', e)
+        );
+      }
     }
   });
 }

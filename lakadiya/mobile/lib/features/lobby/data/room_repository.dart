@@ -4,8 +4,8 @@ class RoomRepository {
   final ApiService _api;
   RoomRepository({ApiService? api}) : _api = api ?? ApiService();
 
-  Future<Map<String, dynamic>> createRoom({bool isPrivate = false}) async {
-    final res = await _api.post('/rooms', data: {'isPrivate': isPrivate});
+  Future<Map<String, dynamic>> createRoom({bool isPrivate = false, double betAmount = 0}) async {
+    final res = await _api.post('/rooms', data: {'isPrivate': isPrivate, 'betAmount': betAmount});
     return Map<String, dynamic>.from(res.data as Map);
   }
 
