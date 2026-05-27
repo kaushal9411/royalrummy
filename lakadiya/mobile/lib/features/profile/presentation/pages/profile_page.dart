@@ -3,7 +3,9 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../core/services/api_service.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/utils/auth_guard.dart';
 import '../../../auth/presentation/bloc/auth_bloc.dart';
+import '../../../payments/presentation/bloc/payment_bloc.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -36,6 +38,9 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
     ]).animate(CurvedAnimation(parent: _enterCtrl, curve: Curves.easeOut));
     _avatarGlow = CurvedAnimation(parent: _avatarCtrl, curve: Curves.easeInOut);
     _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) context.read<PaymentBloc>().add(const FetchWalletBalanceEvent());
+    });
   }
 
   @override
@@ -79,7 +84,14 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return BlocListener<PaymentBloc, PaymentState>(
+      listenWhen: (_, s) => s is WalletBalanceFetched,
+      listener: (_, state) {
+        if (state is WalletBalanceFetched && _profile != null) {
+          setState(() => _profile!['coins'] = state.balance.coins);
+        }
+      },
+      child: Scaffold(
       backgroundColor: Colors.transparent,
       body: Stack(
         children: [
@@ -118,6 +130,7 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
             ),
           ),
         ],
+      ),
       ),
     );
   }
@@ -540,21 +553,21 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
               label: 'Add Money',
               icon: Icons.arrow_downward_rounded,
               colors: const [Color(0xFF00E676), Color(0xFF00C853), Color(0xFF007E33)],
-              onTap: () => context.push('/add-money'),
+              onTap: () => requireAuth(context, () => context.push('/add-money')),
             )),
             const SizedBox(width: 12),
             Expanded(child: _WalletBtn(
               label: 'Withdraw',
               icon: Icons.arrow_upward_rounded,
               colors: const [AppColors.accent, AppColors.accentDark],
-              onTap: () => context.push('/withdraw'),
+              onTap: () => requireAuth(context, () => context.push('/withdraw')),
             )),
           ]),
           const SizedBox(height: 10),
 
           // History button
           GestureDetector(
-            onTap: () => context.push('/wallet'),
+            onTap: () => requireAuth(context, () => context.push('/wallet')),
             child: Container(
               padding: const EdgeInsets.symmetric(vertical: 13),
               decoration: BoxDecoration(

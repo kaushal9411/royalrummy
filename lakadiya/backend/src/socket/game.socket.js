@@ -12,6 +12,9 @@ const gameStates = new Map();
 // Track which socket IDs belong to which userId + roomId
 const userSockets = new Map(); // userId => socketId
 
+// Personal room name for direct user targeting
+const userRoom = (userId) => `user_${userId}`;
+
 const BOT_DELAY_MS = 1200; // simulate bot thinking
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -222,6 +225,8 @@ async function handleGameEnd(io, roomId, state) {
 function registerGameSocket(io, socket) {
   const { userId } = socket;
   userSockets.set(userId, socket.id);
+  // Join personal room so payment events can target this user directly
+  socket.join(userRoom(userId));
 
   // ── Join room channel ──
   socket.on('join_room', async ({ roomId }) => {

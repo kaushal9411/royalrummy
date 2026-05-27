@@ -145,6 +145,12 @@ export default function PaymentManagement() {
   useEffect(() => { loadStats(); }, [loadStats]);
   useEffect(() => { loadData(); }, [loadData]);
 
+  // Auto-refresh every 30 s so balance, withdrawals, and stats stay current
+  useEffect(() => {
+    const id = setInterval(() => { loadStats(); loadData(); }, 30_000);
+    return () => clearInterval(id);
+  }, [loadStats, loadData]);
+
   const handleApprove = async () => {
     if (!approveTarget) return;
     setActionL(true);

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import '../../core/services/api_service.dart';
 import '../../features/auth/presentation/bloc/auth_bloc.dart';
 import '../../features/auth/presentation/pages/login_page.dart';
 import '../../features/auth/presentation/pages/register_page.dart';
@@ -11,14 +10,13 @@ import '../../features/game/presentation/pages/game_page.dart';
 import '../../features/profile/presentation/pages/profile_page.dart';
 import '../../features/leaderboard/presentation/pages/leaderboard_page.dart';
 import '../../features/payments/presentation/bloc/payment_bloc.dart';
-import '../../features/payments/data/repository/payment_repository.dart';
 import '../../features/payments/presentation/screens/wallet_screen.dart';
 import '../../features/payments/presentation/screens/add_money_screen.dart';
 import '../../features/payments/presentation/screens/withdraw_screen.dart';
 
 final _rootKey = GlobalKey<NavigatorState>();
 
-GoRouter createRouter(AuthBloc authBloc) => GoRouter(
+GoRouter createRouter(AuthBloc authBloc, PaymentBloc paymentBloc) => GoRouter(
   navigatorKey: _rootKey,
   initialLocation: '/lobby',
   redirect: (context, state) {
@@ -46,25 +44,25 @@ GoRouter createRouter(AuthBloc authBloc) => GoRouter(
     GoRoute(path: '/profile',     builder: (_, __) => const ProfilePage()),
     GoRoute(path: '/leaderboard', builder: (_, __) => const LeaderboardPage()),
 
-    // Payment Routes
+    // Payment Routes — share the global PaymentBloc so balance stays in sync
     GoRoute(
       path: '/wallet',
-      builder: (_, __) => BlocProvider(
-        create: (_) => PaymentBloc(PaymentRepository(ApiService())),
+      builder: (_, __) => BlocProvider.value(
+        value: paymentBloc,
         child: const WalletScreen(),
       ),
     ),
     GoRoute(
       path: '/add-money',
-      builder: (_, __) => BlocProvider(
-        create: (_) => PaymentBloc(PaymentRepository(ApiService())),
+      builder: (_, __) => BlocProvider.value(
+        value: paymentBloc,
         child: const AddMoneyScreen(),
       ),
     ),
     GoRoute(
       path: '/withdraw',
-      builder: (_, __) => BlocProvider(
-        create: (_) => PaymentBloc(PaymentRepository(ApiService())),
+      builder: (_, __) => BlocProvider.value(
+        value: paymentBloc,
         child: const WithdrawScreen(),
       ),
     ),

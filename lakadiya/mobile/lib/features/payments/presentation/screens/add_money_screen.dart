@@ -22,6 +22,15 @@ class _AddMoneyScreenState extends State<AddMoneyScreen>
 
   static const _quickAmounts = [100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0];
 
+  static final Map<double, String?> _cardLabels = {
+    100.0: null,
+    200.0: null,
+    500.0: 'Popular',
+    1000.0: 'Best Value',
+    2000.0: null,
+    5000.0: null,
+  };
+
   @override
   void initState() {
     super.initState();
@@ -90,6 +99,33 @@ class _AddMoneyScreenState extends State<AddMoneyScreen>
     });
   }
 
+  void _showPaymentModal(double amount) {
+    showGeneralDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Payment',
+      barrierColor: Colors.black.withValues(alpha: 0.78),
+      transitionDuration: const Duration(milliseconds: 320),
+      pageBuilder: (dialogCtx, _, __) => Center(
+        child: Material(
+          color: Colors.transparent,
+          child: _FloatingPaymentCard(
+            amount: amount,
+            onConfirm: () {
+              Navigator.pop(dialogCtx);
+              _initiatePayment(amount);
+            },
+            onCancel: () => Navigator.pop(dialogCtx),
+          ),
+        ),
+      ),
+      transitionBuilder: (_, anim, __, child) => ScaleTransition(
+        scale: CurvedAnimation(parent: anim, curve: Curves.easeOutBack),
+        child: FadeTransition(opacity: anim, child: child),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -110,8 +146,9 @@ class _AddMoneyScreenState extends State<AddMoneyScreen>
                   );
                   _amountCtl.clear();
                   setState(() => _selectedQuick = null);
+                  final router = GoRouter.of(context);
                   Future.delayed(const Duration(seconds: 2), () {
-                    if (mounted) context.pop();
+                    if (mounted) router.pop();
                   });
                 } else if (state is PaymentError) {
                   _snack(state.message, AppColors.danger);
@@ -132,7 +169,7 @@ class _AddMoneyScreenState extends State<AddMoneyScreen>
                               _buildInfoBanner(),
                               const SizedBox(height: 20),
                               _buildSectionLabel(Icons.bolt_rounded, 'Quick Select'),
-                              const SizedBox(height: 12),
+                              const SizedBox(height: 14),
                               _buildQuickGrid(loading),
                               const SizedBox(height: 22),
                               _buildSectionLabel(Icons.edit_rounded, 'Custom Amount'),
@@ -228,62 +265,164 @@ class _AddMoneyScreenState extends State<AddMoneyScreen>
     crossAxisCount: 3,
     shrinkWrap: true,
     physics: const NeverScrollableScrollPhysics(),
-    mainAxisSpacing: 10,
-    crossAxisSpacing: 10,
-    childAspectRatio: 1.5,
-    children: _quickAmounts.map((amt) {
-      final selected = _selectedQuick == amt;
-      return GestureDetector(
-        onTap: loading ? null : () {
-          setState(() {
-            _selectedQuick = amt;
-            _amountCtl.text = amt.toInt().toString();
-          });
-        },
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(14),
-            gradient: selected
-                ? const LinearGradient(
-                    colors: [Color(0xFF00E676), Color(0xFF00C853), Color(0xFF007E33)])
-                : LinearGradient(colors: [
-                    AppColors.primary.withValues(alpha: 0.1),
-                    const Color(0xFF0A1422),
-                  ]),
-            border: Border.all(
-              color: selected
-                  ? AppColors.primary
-                  : AppColors.darkBorder,
-              width: selected ? 1.5 : 1,
-            ),
-            boxShadow: selected
-                ? [BoxShadow(
-                    color: AppColors.primary.withValues(alpha: 0.35),
-                    blurRadius: 10, offset: const Offset(0, 4),
-                  )]
-                : null,
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text('₹${amt.toInt()}',
-                  style: TextStyle(
-                    color: selected ? Colors.white : AppColors.textPrimary,
-                    fontWeight: FontWeight.w900, fontSize: 17,
-                  )),
-              const SizedBox(height: 2),
-              Text('${(amt * 10).toInt()} coins',
-                  style: TextStyle(
-                    color: selected ? Colors.white70 : AppColors.textMuted,
-                    fontSize: 11,
-                  )),
-            ],
-          ),
-        ),
-      );
-    }).toList(),
+    mainAxisSpacing: 14,
+    crossAxisSpacing: 12,
+    childAspectRatio: 1.15,
+    children: _quickAmounts.map((amt) => _buildPremiumCard(amt, loading)).toList(),
   );
+
+  Widget _buildPremiumCard(double amt, bool loading) {
+    final selected = _selectedQuick == amt;
+    final label = _cardLabels[amt];
+    final coins = (amt * 10).toInt();
+
+    return GestureDetector(
+      onTap: loading ? null : () => setState(() {
+        _selectedQuick = amt;
+        _amountCtl.text = amt.toInt().toString();
+      }),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(18),
+              gradient: selected
+                  ? const LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [Color(0xFF00E676), Color(0xFF00C853), Color(0xFF007E33)],
+                    )
+                  : const LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [Color(0xFF18293D), Color(0xFF0D1B2A)],
+                    ),
+              border: Border.all(
+                color: selected
+                    ? const Color(0xFF00E676).withValues(alpha: 0.55)
+                    : Colors.white.withValues(alpha: 0.08),
+                width: selected ? 1.5 : 1,
+              ),
+              boxShadow: selected
+                  ? [
+                      BoxShadow(
+                        color: const Color(0xFF00E676).withValues(alpha: 0.38),
+                        blurRadius: 18,
+                        spreadRadius: 0,
+                        offset: const Offset(0, 7),
+                      ),
+                      BoxShadow(
+                        color: const Color(0xFF00E676).withValues(alpha: 0.14),
+                        blurRadius: 32,
+                        spreadRadius: 6,
+                      ),
+                    ]
+                  : [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.35),
+                        blurRadius: 10,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  // Top row: icon + checkmark
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      if (selected)
+                        const Icon(Icons.check_circle_rounded,
+                            color: Colors.white, size: 13)
+                      else
+                        Icon(Icons.account_balance_wallet_outlined,
+                            color: Colors.white.withValues(alpha: 0.3), size: 13),
+                    ],
+                  ),
+                  const SizedBox(height: 5),
+                  // Amount
+                  ShaderMask(
+                    shaderCallback: (b) => LinearGradient(
+                      colors: selected
+                          ? [Colors.white, Colors.white.withValues(alpha: 0.9)]
+                          : [const Color(0xFFDDE6F0), const Color(0xFF8FA8C0)],
+                    ).createShader(b),
+                    child: Text(
+                      '₹${amt.toInt()}',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w900,
+                        fontSize: amt >= 2000 ? 16 : 19,
+                        letterSpacing: -0.5,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  // Coins row
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('🪙', style: TextStyle(fontSize: selected ? 10 : 9)),
+                      const SizedBox(width: 3),
+                      Text(
+                        coins >= 10000
+                            ? '${(coins / 1000).toStringAsFixed(0)}K'
+                            : '$coins',
+                        style: TextStyle(
+                          color: selected
+                              ? Colors.white.withValues(alpha: 0.85)
+                              : AppColors.textMuted,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // Badge
+          if (label != null)
+            Positioned(
+              top: -9,
+              right: -4,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFFFFD700), Color(0xFFFF8C00)],
+                  ),
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFFFFD700).withValues(alpha: 0.45),
+                      blurRadius: 10,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
+                ),
+                child: Text(
+                  label,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 8,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 
   Widget _buildAmountField(bool loading) => TextField(
     controller: _amountCtl,
@@ -320,11 +459,7 @@ class _AddMoneyScreenState extends State<AddMoneyScreen>
     final amt = double.tryParse(_amountCtl.text) ?? 0;
     final valid = amt > 0;
     return GestureDetector(
-      onTap: (loading || !valid) ? null : () {
-        final a = double.tryParse(_amountCtl.text);
-        if (a == null || a <= 0) { _snack('Enter a valid amount', AppColors.danger); return; }
-        _initiatePayment(a);
-      },
+      onTap: (loading || !valid) ? null : () => _showPaymentModal(amt),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         height: 56,
@@ -358,7 +493,265 @@ class _AddMoneyScreenState extends State<AddMoneyScreen>
   }
 }
 
-// ── Shared gradient background (reused across all payment screens) ─────────────
+// ── Floating payment confirmation modal ───────────────────────────────────────
+class _FloatingPaymentCard extends StatelessWidget {
+  final double amount;
+  final VoidCallback onConfirm;
+  final VoidCallback onCancel;
+
+  const _FloatingPaymentCard({
+    required this.amount,
+    required this.onConfirm,
+    required this.onCancel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final coins = (amount * 10).toInt();
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0D1B2A),
+        borderRadius: BorderRadius.circular(26),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.09)),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primary.withValues(alpha: 0.22),
+            blurRadius: 48,
+            spreadRadius: 0,
+            offset: const Offset(0, 24),
+          ),
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.85),
+            blurRadius: 70,
+            spreadRadius: 12,
+          ),
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.45),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Header
+          Container(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+            decoration: BoxDecoration(
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  AppColors.primary.withValues(alpha: 0.12),
+                  Colors.transparent,
+                ],
+              ),
+            ),
+            child: Row(children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(13),
+                  border: Border.all(
+                      color: AppColors.primary.withValues(alpha: 0.25)),
+                ),
+                child: const Icon(Icons.lock_rounded,
+                    color: AppColors.primary, size: 18),
+              ),
+              const SizedBox(width: 14),
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('Secure Payment',
+                    style: TextStyle(
+                        color: AppColors.textPrimary,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16)),
+                Text('Powered by Razorpay',
+                    style: TextStyle(
+                        color: AppColors.textMuted, fontSize: 12)),
+              ]),
+              const Spacer(),
+              GestureDetector(
+                onTap: onCancel,
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.05),
+                    borderRadius: BorderRadius.circular(9),
+                    border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.07)),
+                  ),
+                  child: const Icon(Icons.close_rounded,
+                      color: AppColors.textMuted, size: 18),
+                ),
+              ),
+            ]),
+          ),
+          Divider(
+              color: Colors.white.withValues(alpha: 0.06), height: 1, thickness: 1),
+          // Body
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 24, 24, 24),
+            child: Column(children: [
+              // Amount display
+              ShaderMask(
+                shaderCallback: (b) => const LinearGradient(
+                  colors: [Color(0xFF00E676), Color(0xFF00C853)],
+                ).createShader(b),
+                child: Text(
+                  '₹${amount.toStringAsFixed(0)}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 52,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: -2,
+                    height: 1,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              // Coins
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFD700).withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                      color: const Color(0xFFFFD700).withValues(alpha: 0.2)),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Text('🪙', style: TextStyle(fontSize: 16)),
+                  const SizedBox(width: 6),
+                  Text(
+                    '+$coins coins will be added',
+                    style: const TextStyle(
+                      color: Color(0xFFFFD700),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ]),
+              ),
+              const SizedBox(height: 20),
+              // Payment methods
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.04),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.06)),
+                ),
+                child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      _PayMethod(
+                          icon: Icons.account_balance_wallet_rounded,
+                          label: 'UPI'),
+                      _MethodDivider(),
+                      _PayMethod(
+                          icon: Icons.credit_card_rounded, label: 'Card'),
+                      _MethodDivider(),
+                      _PayMethod(
+                          icon: Icons.account_balance_rounded, label: 'Bank'),
+                    ]),
+              ),
+              const SizedBox(height: 22),
+              // CTA button
+              GestureDetector(
+                onTap: onConfirm,
+                child: Container(
+                  height: 54,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(16),
+                    gradient: const LinearGradient(
+                      colors: [
+                        Color(0xFF00E676),
+                        Color(0xFF00C853),
+                        Color(0xFF007E33)
+                      ],
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF00E676).withValues(alpha: 0.42),
+                        blurRadius: 22,
+                        offset: const Offset(0, 8),
+                      ),
+                      BoxShadow(
+                        color: const Color(0xFF00E676).withValues(alpha: 0.18),
+                        blurRadius: 40,
+                        spreadRadius: 2,
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.lock_rounded,
+                          color: Colors.white, size: 18),
+                      const SizedBox(width: 10),
+                      Text(
+                        'Pay ₹${amount.toStringAsFixed(0)} Now',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.2,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              GestureDetector(
+                onTap: onCancel,
+                child: const Text('Cancel',
+                    style: TextStyle(
+                        color: AppColors.textMuted, fontSize: 13)),
+              ),
+            ]),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PayMethod extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  const _PayMethod({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: AppColors.textSecondary, size: 15),
+          const SizedBox(width: 5),
+          Text(label,
+              style: const TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500)),
+        ],
+      );
+}
+
+class _MethodDivider extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) => Container(
+        width: 1,
+        height: 18,
+        color: Colors.white.withValues(alpha: 0.1),
+      );
+}
+
+// ── Shared gradient background ────────────────────────────────────────────────
 class _PayBg extends StatelessWidget {
   final Animation<double> anim;
   const _PayBg({required this.anim});

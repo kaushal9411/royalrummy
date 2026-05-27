@@ -9,6 +9,8 @@ import 'core/theme/app_theme.dart';
 import 'features/auth/data/repositories/auth_repository.dart';
 import 'features/auth/presentation/bloc/auth_bloc.dart';
 import 'features/game/presentation/bloc/game_bloc.dart';
+import 'features/payments/data/repository/payment_repository.dart';
+import 'features/payments/presentation/bloc/payment_bloc.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -28,6 +30,7 @@ class LakadiyaApp extends StatefulWidget {
 class _LakadiyaAppState extends State<LakadiyaApp> {
   late final AuthBloc _authBloc;
   late final GameBloc _gameBloc;
+  late final PaymentBloc _paymentBloc;
 
   @override
   void initState() {
@@ -35,12 +38,17 @@ class _LakadiyaAppState extends State<LakadiyaApp> {
     _authBloc = AuthBloc(repo: AuthRepository())
       ..add(AuthCheckRequested());
     _gameBloc = GameBloc();
+    _paymentBloc = PaymentBloc(
+      PaymentRepository(ApiService()),
+      SocketService(),
+    );
   }
 
   @override
   void dispose() {
     _authBloc.close();
     _gameBloc.close();
+    _paymentBloc.close();
     super.dispose();
   }
 
@@ -50,22 +58,24 @@ class _LakadiyaAppState extends State<LakadiyaApp> {
       providers: [
         BlocProvider.value(value: _authBloc),
         BlocProvider.value(value: _gameBloc),
+        BlocProvider.value(value: _paymentBloc),
       ],
-      child: _AppView(authBloc: _authBloc),
+      child: _AppView(authBloc: _authBloc, paymentBloc: _paymentBloc),
     );
   }
 }
 
 class _AppView extends StatefulWidget {
   final AuthBloc authBloc;
-  const _AppView({required this.authBloc});
+  final PaymentBloc paymentBloc;
+  const _AppView({required this.authBloc, required this.paymentBloc});
 
   @override
   State<_AppView> createState() => _AppViewState();
 }
 
 class _AppViewState extends State<_AppView> {
-  late final router = createRouter(widget.authBloc);
+  late final router = createRouter(widget.authBloc, widget.paymentBloc);
 
   @override
   Widget build(BuildContext context) {

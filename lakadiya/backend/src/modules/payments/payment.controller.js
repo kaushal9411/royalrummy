@@ -1,4 +1,9 @@
 const paymentService = require('./payment.service');
+const { getIO } = require('../../socket/socket.manager');
+
+const emitBalanceUpdated = (userId) => {
+  try { getIO().to(`user_${userId}`).emit('balance_updated'); } catch (_) {}
+};
 
 const initiateAddMoney = async (req, res, next) => {
   try {
@@ -27,6 +32,7 @@ const verifyPayment = async (req, res, next) => {
 
     const result = await paymentService.verifyPayment(req.user.id, paymentId, orderId, signature);
     console.log(`[Payment Controller] Payment verified successfully`);
+    emitBalanceUpdated(req.user.id);
     res.json(result);
   } catch (err) {
     console.error(`[Payment Controller Error] Verify failed:`, err);
@@ -141,6 +147,7 @@ const approveWithdrawal = async (req, res, next) => {
     console.log(`[Payment Admin] Approving withdrawal - Transaction: ${transactionId}`);
     
     const result = await paymentService.approveWithdrawal(transactionId);
+    emitBalanceUpdated(result.user_id);
     res.json({ message: 'Withdrawal approved', data: result });
   } catch (err) {
     console.error(`[Payment Admin Error] Approve withdrawal failed:`, err);
@@ -155,6 +162,7 @@ const rejectWithdrawal = async (req, res, next) => {
     console.log(`[Payment Admin] Rejecting withdrawal - Transaction: ${transactionId}`);
     
     const result = await paymentService.rejectWithdrawal(transactionId, reason);
+    emitBalanceUpdated(result.user_id);
     res.json({ message: 'Withdrawal rejected', data: result });
   } catch (err) {
     console.error(`[Payment Admin Error] Reject withdrawal failed:`, err);

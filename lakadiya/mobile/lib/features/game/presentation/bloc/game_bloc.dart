@@ -274,6 +274,8 @@ class GameBloc extends Bloc<GameEvent, GameState> {
       _listenersRegistered = true;
       _registerSocketListeners();
     }
+    // Reconnect if the socket was disconnected from a previous game's leave.
+    if (!_socket.isConnected) _socket.connect();
     _socket.joinRoom(event.roomId);
     // Don't revert to waiting if the game is already in progress.
     // game_page calls GameJoinRoom in initState which can arrive after
@@ -479,7 +481,17 @@ class GameBloc extends Bloc<GameEvent, GameState> {
   void _onEmoji(GameEmojiReceived event, Emitter<GameState> emit) {}
 
   void _onLeave(GameLeave event, Emitter<GameState> emit) {
-    if (_roomId != null) _socket.off('game_started');
+    // Remove every listener so they don't stack on the next game.
+    for (final e in [
+      'game_started', 'deal_cards', 'bidding_started', 'bid_placed',
+      'card_played', 'trick_result', 'round_result', 'game_result',
+      'game_state_update', 'game_state_sync', 'error',
+      'chat_message', 'emoji_reaction',
+    ]) { _socket.off(e); }
+    // Allow the next GameJoinRoom to re-register listeners fresh.
+    _listenersRegistered = false;
+    _pendingPlayers = [];
+    _pendingHand    = [];
     _socket.disconnect();
     emit(GameInitial());
   }

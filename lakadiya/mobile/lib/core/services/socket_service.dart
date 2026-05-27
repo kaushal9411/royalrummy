@@ -13,6 +13,10 @@ class SocketService {
   bool get isConnected => _socket?.connected ?? false;
 
   void connect() {
+    if (_socket != null) {
+      if (!_socket!.connected) _socket!.connect();
+      return;
+    }
     final token = StorageService.getToken();
     if (token == null) return;
 

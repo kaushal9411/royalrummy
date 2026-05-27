@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../../../../core/theme/app_theme.dart';
+import '../../../../../core/utils/auth_guard.dart';
 import '../bloc/payment_bloc.dart';
 import '../../data/models/payment_model.dart';
 
@@ -15,12 +16,22 @@ class WalletScreen extends StatefulWidget {
 class _WalletScreenState extends State<WalletScreen>
     with SingleTickerProviderStateMixin {
   late final AnimationController _bgCtrl;
+  WalletBalance? _balance;
+  List<Transaction>? _transactions;
+  bool _balanceLoading = true;
+  bool _txLoading = true;
 
   @override
   void initState() {
     super.initState();
     _bgCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 4))
       ..repeat(reverse: true);
+    // Seed from cached balance so screen shows immediately on re-visit
+    final cached = context.read<PaymentBloc>().cachedBalance;
+    if (cached != null) {
+      _balance = cached;
+      _balanceLoading = false;
+    }
     context.read<PaymentBloc>().add(const FetchWalletBalanceEvent());
     context.read<PaymentBloc>().add(const FetchTransactionHistoryEvent());
   }
@@ -28,72 +39,76 @@ class _WalletScreenState extends State<WalletScreen>
   @override
   void dispose() { _bgCtrl.dispose(); super.dispose(); }
 
+  void _refresh() {
+    context.read<PaymentBloc>().add(const FetchWalletBalanceEvent());
+    context.read<PaymentBloc>().add(const FetchTransactionHistoryEvent());
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      body: Stack(
-        children: [
-          _PayBg(anim: _bgCtrl),
-          SafeArea(
-            child: Column(
-              children: [
-                _buildHeader(context),
-                Expanded(
-                  child: RefreshIndicator(
-                    color: AppColors.primary,
-                    backgroundColor: AppColors.darkCard,
-                    onRefresh: () async {
-                      context.read<PaymentBloc>().add(const FetchWalletBalanceEvent());
-                      context.read<PaymentBloc>().add(const FetchTransactionHistoryEvent());
-                    },
-                    child: SingleChildScrollView(
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-                      child: Column(
-                        children: [
-                          BlocBuilder<PaymentBloc, PaymentState>(
-                            builder: (_, state) {
-                              if (state is WalletBalanceFetched) {
-                                return _buildBalanceCard(state.balance);
-                              }
-                              if (state is PaymentError) {
-                                return _buildErrorCard(state.message);
-                              }
-                              return const Padding(
-                                padding: EdgeInsets.symmetric(vertical: 40),
-                                child: CircularProgressIndicator(color: AppColors.primary),
-                              );
-                            },
-                          ),
-                          const SizedBox(height: 20),
-                          _buildSectionLabel(Icons.receipt_long_rounded, 'Transaction History'),
-                          const SizedBox(height: 12),
-                          BlocBuilder<PaymentBloc, PaymentState>(
-                            builder: (_, state) {
-                              if (state is TransactionHistoryFetched) {
-                                if (state.transactions.isEmpty) return _buildEmpty('No transactions yet');
-                                return Column(
-                                  children: List.generate(state.transactions.length, (i) =>
-                                    _TransactionTile(tx: state.transactions[i], index: i)),
-                                );
-                              }
-                              if (state is PaymentError) return _buildErrorCard(state.message);
-                              return const Padding(
-                                padding: EdgeInsets.symmetric(vertical: 24),
-                                child: CircularProgressIndicator(color: AppColors.primary),
-                              );
-                            },
-                          ),
-                        ],
+    return BlocListener<PaymentBloc, PaymentState>(
+      listener: (_, state) {
+        if (state is WalletBalanceFetched) {
+          setState(() { _balance = state.balance; _balanceLoading = false; });
+        } else if (state is TransactionHistoryFetched) {
+          setState(() { _transactions = state.transactions; _txLoading = false; });
+        } else if (state is PaymentError && _balance == null) {
+          setState(() => _balanceLoading = false);
+        }
+      },
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: Stack(
+          children: [
+            _PayBg(anim: _bgCtrl),
+            SafeArea(
+              child: Column(
+                children: [
+                  _buildHeader(context),
+                  Expanded(
+                    child: RefreshIndicator(
+                      color: AppColors.primary,
+                      backgroundColor: AppColors.darkCard,
+                      onRefresh: () async => _refresh(),
+                      child: SingleChildScrollView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                        child: Column(
+                          children: [
+                            _balanceLoading
+                                ? const Padding(
+                                    padding: EdgeInsets.symmetric(vertical: 40),
+                                    child: CircularProgressIndicator(color: AppColors.primary),
+                                  )
+                                : _balance != null
+                                    ? _buildBalanceCard(_balance!)
+                                    : _buildErrorCard('Failed to load balance'),
+                            const SizedBox(height: 20),
+                            _buildSectionLabel(Icons.receipt_long_rounded, 'Transaction History'),
+                            const SizedBox(height: 12),
+                            _txLoading
+                                ? const Padding(
+                                    padding: EdgeInsets.symmetric(vertical: 24),
+                                    child: CircularProgressIndicator(color: AppColors.primary),
+                                  )
+                                : _transactions == null || _transactions!.isEmpty
+                                    ? _buildEmpty('No transactions yet')
+                                    : Column(
+                                        children: List.generate(
+                                          _transactions!.length,
+                                          (i) => _TransactionTile(tx: _transactions![i], index: i),
+                                        ),
+                                      ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -187,14 +202,14 @@ class _WalletScreenState extends State<WalletScreen>
               label: 'Add Money',
               icon: Icons.arrow_downward_rounded,
               colors: const [Color(0xFF00E676), Color(0xFF00C853), Color(0xFF007E33)],
-              onTap: () => context.push('/add-money'),
+              onTap: () => requireAuth(context, () => context.push('/add-money')),
             )),
             const SizedBox(width: 12),
             Expanded(child: _PayBtn(
               label: 'Withdraw',
               icon: Icons.arrow_upward_rounded,
               colors: const [AppColors.accent, AppColors.accentDark],
-              onTap: () => context.push('/withdraw'),
+              onTap: () => requireAuth(context, () => context.push('/withdraw')),
             )),
           ]),
         ],

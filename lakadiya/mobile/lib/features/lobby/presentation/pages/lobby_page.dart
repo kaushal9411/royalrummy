@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../auth/presentation/bloc/auth_bloc.dart';
 import '../../../game/presentation/bloc/game_bloc.dart';
+import '../../../payments/presentation/bloc/payment_bloc.dart';
+import '../../../../core/utils/auth_guard.dart';
 import '../../data/room_repository.dart';
 
 class LobbyPage extends StatefulWidget {
@@ -34,6 +36,9 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
     _loadPublicRooms();
     Future.delayed(const Duration(milliseconds: 80), () {
       if (mounted) _enterCtrl.forward();
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) context.read<PaymentBloc>().add(const FetchWalletBalanceEvent());
     });
   }
 
@@ -150,8 +155,11 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
     final auth = context.watch<AuthBloc>().state;
     final username = auth is AuthAuthenticated ? auth.user.username : 'Player';
     final level = auth is AuthAuthenticated ? auth.user.level : 1;
-    final coins = auth is AuthAuthenticated ? auth.user.coins : 0;
     final xp = auth is AuthAuthenticated ? auth.user.xp : 0;
+    // Live coins from PaymentBloc; fall back to auth entity until first fetch completes
+    final coins = context.select<PaymentBloc, int>(
+      (b) => b.cachedBalance?.coins ?? (auth is AuthAuthenticated ? auth.user.coins : 0),
+    );
 
     return Scaffold(
       backgroundColor: const Color(0xFF050B15),
@@ -444,8 +452,10 @@ class _WelcomeBanner extends StatelessWidget {
                       color: AppColors.textMuted, fontSize: 11)),
             ],
           )),
-          // Coins badge
-          Container(
+          // Coins badge — tapping opens wallet (with login guard)
+          GestureDetector(
+            onTap: () => requireAuth(context, () => context.push('/wallet')),
+            child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
               color: AppColors.primary.withValues(alpha: 0.12),
@@ -463,6 +473,7 @@ class _WelcomeBanner extends StatelessWidget {
                       fontWeight: FontWeight.bold,
                       fontSize: 14)),
             ]),
+          ),
           ),
         ]),
         const SizedBox(height: 14),
