@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../core/services/api_service.dart';
+import '../../../../core/services/socket_service.dart';
 import '../../../../core/theme/app_theme.dart';
 
 class LeaderboardPage extends StatefulWidget {
@@ -25,10 +26,16 @@ class _LeaderboardPageState extends State<LeaderboardPage>
     _bgCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 4))
       ..repeat(reverse: true);
     _load();
+    SocketService().on('leaderboard_updated', _onLeaderboardUpdated);
+  }
+
+  void _onLeaderboardUpdated(_) {
+    if (mounted) _load();
   }
 
   @override
   void dispose() {
+    SocketService().off('leaderboard_updated');
     _tabCtl.dispose();
     _bgCtrl.dispose();
     super.dispose();

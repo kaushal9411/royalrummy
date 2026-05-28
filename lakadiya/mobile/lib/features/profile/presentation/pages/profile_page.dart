@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../core/services/api_service.dart';
+import '../../../../core/services/socket_service.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/utils/auth_guard.dart';
 import '../../../auth/presentation/bloc/auth_bloc.dart';
@@ -53,10 +54,16 @@ class _ProfilePageState extends State<ProfilePage>
       if (mounted)
         context.read<PaymentBloc>().add(const FetchWalletBalanceEvent());
     });
+    SocketService().on('leaderboard_updated', _onStatsUpdated);
+  }
+
+  void _onStatsUpdated(_) {
+    if (mounted) _load();
   }
 
   @override
   void dispose() {
+    SocketService().off('leaderboard_updated');
     _enterCtrl.dispose();
     _avatarCtrl.dispose();
     _xpCtrl.dispose();

@@ -42,9 +42,13 @@ async function persistMatch(matchId, winnerUserId, finalScores, players) {
 }
 
 async function updatePlayerStats(players, finalScores, winnerSeat) {
+  const rewards = {}; // keyed by seat number
+
   for (const player of players) {
     if (player.isBot) continue;
     const isWinner = player.seat === winnerSeat;
+
+    // Update match stats
     await query(
       `INSERT INTO player_stats (user_id, matches_played, matches_won, total_score)
          VALUES ($1, 1, $2, $3)
@@ -57,25 +61,39 @@ async function updatePlayerStats(players, finalScores, winnerSeat) {
       [player.userId, isWinner ? 1 : 0, finalScores[player.seat] || 0]
     );
 
-    // XP reward
-    const xp = isWinner ? 100 : 25;
-    await query('UPDATE users SET xp = xp + $1 WHERE id = $2', [xp, player.userId]);
+    // Snapshot XP + level before update
+    const cur      = await query('SELECT xp, level FROM users WHERE id = $1', [player.userId]);
+    const oldXp    = parseInt(cur.rows[0]?.xp    ?? 0,  10);
+    const oldLevel = parseInt(cur.rows[0]?.level ?? 1,  10);
 
-    // Update level (every 500 XP = 1 level)
+    const xpEarned    = isWinner ? 100 : 25;
+    const coinsEarned = isWinner ? 50  : 10;
+    const newXp       = oldXp + xpEarned;
+    const newLevel    = Math.max(1, Math.floor(newXp / 500) + 1);
+
+    // Atomic XP + level + coins update
     await query(
-      `UPDATE users SET level = GREATEST(1, FLOOR(xp / 500) + 1) WHERE id = $1`,
-      [player.userId]
+      `UPDATE users SET xp = $1, level = $2, coins = coins + $3 WHERE id = $4`,
+      [newXp, newLevel, coinsEarned, player.userId]
     );
-
-    // Coins reward
-    const coins = isWinner ? 50 : 10;
-    await query('UPDATE users SET coins = coins + $1 WHERE id = $2', [coins, player.userId]);
     await query(
       `INSERT INTO coin_transactions (user_id, amount, type, description)
        VALUES ($1, $2, $3, $4)`,
-      [player.userId, coins, 'game_reward', isWinner ? 'Match winner reward' : 'Participation reward']
+      [player.userId, coinsEarned, 'game_reward', isWinner ? 'Match winner reward' : 'Participation reward']
     );
+
+    rewards[player.seat] = {
+      userId:       player.userId,
+      xpEarned,
+      newXp,
+      oldLevel,
+      newLevel,
+      coinsEarned,
+      leveledUp:    newLevel > oldLevel,
+    };
   }
+
+  return rewards;
 }
 
 async function createMatch(roomId) {

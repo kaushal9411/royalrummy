@@ -189,11 +189,12 @@ async function handleGameEnd(io, roomId, state) {
   const winnerSeat = engine.getGameWinner(state);
   const winner = state.players[winnerSeat];
 
+  let playerRewards = {};
   if (state.matchId) {
     await scoreEngine.persistMatch(
       state.matchId, winner.userId, state.scores, state.players
     );
-    await scoreEngine.updatePlayerStats(state.players, state.scores, winnerSeat);
+    playerRewards = await scoreEngine.updatePlayerStats(state.players, state.scores, winnerSeat);
   }
 
   // Settle bets — only if real winner has a userId (not a bot)
@@ -208,13 +209,17 @@ async function handleGameEnd(io, roomId, state) {
 
   io.to(roomId).emit('game_result', {
     winnerSeat,
-    winnerName:  winner.username,
-    finalScores: state.scores,
-    roundScores: state.roundScores,
-    betResult:   betResult
+    winnerName:    winner.username,
+    finalScores:   state.scores,
+    roundScores:   state.roundScores,
+    playerRewards,
+    betResult:     betResult
       ? { betAmount: betResult.betAmount, totalPot: betResult.totalPot, winnerUserId: betResult.winnerUserId }
       : null,
   });
+
+  // Notify all connected clients so leaderboard / profile pages can auto-refresh
+  io.emit('leaderboard_updated');
 
   await query(`UPDATE rooms SET status = 'finished' WHERE id = $1`, [roomId]);
   gameStates.delete(roomId);

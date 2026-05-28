@@ -177,6 +177,33 @@ class RoundResultData {
   RoundResultData(this.round, this.roundScores, this.totalScores);
 }
 
+class PlayerReward {
+  final int xpEarned;
+  final int newXp;
+  final int oldLevel;
+  final int newLevel;
+  final int coinsEarned;
+  final bool leveledUp;
+
+  const PlayerReward({
+    required this.xpEarned,
+    required this.newXp,
+    required this.oldLevel,
+    required this.newLevel,
+    required this.coinsEarned,
+    required this.leveledUp,
+  });
+
+  factory PlayerReward.fromJson(Map<String, dynamic> j) => PlayerReward(
+    xpEarned:    (j['xpEarned']    as num?)?.toInt() ?? 0,
+    newXp:       (j['newXp']       as num?)?.toInt() ?? 0,
+    oldLevel:    (j['oldLevel']    as num?)?.toInt() ?? 1,
+    newLevel:    (j['newLevel']    as num?)?.toInt() ?? 1,
+    coinsEarned: (j['coinsEarned'] as num?)?.toInt() ?? 0,
+    leveledUp:   j['leveledUp']    as bool? ?? false,
+  );
+}
+
 class GameResultData {
   final int winnerSeat;
   final String winnerName;
@@ -184,6 +211,7 @@ class GameResultData {
   final double betAmount;
   final double totalPot;
   final String? winnerUserId;
+  final PlayerReward? myReward;
 
   GameResultData(
     this.winnerSeat,
@@ -192,6 +220,7 @@ class GameResultData {
     this.betAmount   = 0,
     this.totalPot    = 0,
     this.winnerUserId,
+    this.myReward,
   });
 
   bool get hasBet => betAmount > 0;
@@ -203,6 +232,7 @@ class GameBloc extends Bloc<GameEvent, GameState> {
   final SocketService _socket;
   String? _roomId;
   int _mySeat = 0;
+  int get mySeat => _mySeat;
   bool _listenersRegistered = false;
   List<Map<String, dynamic>> _pendingPlayers = [];
   List<CardEntity> _pendingHand = [];
@@ -389,10 +419,20 @@ class GameBloc extends Bloc<GameEvent, GameState> {
     final scores = rawScores.map((k, v) => MapEntry(int.parse(k), (v as num).toDouble()));
 
     // Parse optional bet result
-    final betRaw   = d['betResult'] as Map?;
-    final betAmount  = (betRaw?['betAmount']  as num?)?.toDouble() ?? 0.0;
-    final totalPot   = (betRaw?['totalPot']   as num?)?.toDouble() ?? 0.0;
-    final winnerUid  = betRaw?['winnerUserId'] as String?;
+    final betRaw    = d['betResult'] as Map?;
+    final betAmount = (betRaw?['betAmount']  as num?)?.toDouble() ?? 0.0;
+    final totalPot  = (betRaw?['totalPot']   as num?)?.toDouble() ?? 0.0;
+    final winnerUid = betRaw?['winnerUserId'] as String?;
+
+    // Extract this player's reward by seat
+    PlayerReward? myReward;
+    final rewardsRaw = d['playerRewards'] as Map?;
+    if (rewardsRaw != null) {
+      final raw = rewardsRaw[_mySeat.toString()];
+      if (raw != null) {
+        myReward = PlayerReward.fromJson(Map<String, dynamic>.from(raw as Map));
+      }
+    }
 
     final gr = GameResultData(
       (d['winnerSeat'] as num).toInt(),
@@ -401,6 +441,7 @@ class GameBloc extends Bloc<GameEvent, GameState> {
       betAmount:    betAmount,
       totalPot:     totalPot,
       winnerUserId: winnerUid,
+      myReward:     myReward,
     );
     final s = (state as GameInProgress).state;
     emit(GameInProgress(

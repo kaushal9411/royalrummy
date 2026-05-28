@@ -588,60 +588,407 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
       showDialog(
         context: context,
         barrierDismissible: false,
-        builder: (_) => AlertDialog(
-          backgroundColor: const Color(0xFF1A2035),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: const Text('Game Over! 🎉',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                  color: AppColors.accent,
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('🏆 ${gr.winnerName}',
-                  style: const TextStyle(
-                      color: AppColors.primaryLight,
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold)),
-              const SizedBox(height: 16),
-              ...gr.finalScores.entries.map((e) => Padding(
-                padding: const EdgeInsets.symmetric(vertical: 3),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text('Seat ${e.key}',
-                        style: const TextStyle(color: AppColors.textSecondary)),
-                    Text(
-                      e.value >= 0
-                          ? '+${e.value.toStringAsFixed(1)}'
-                          : e.value.toStringAsFixed(1),
-                      style: TextStyle(
-                        color: e.value >= 0
-                            ? AppColors.primaryLight
-                            : AppColors.danger,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-              )),
-            ],
-          ),
-          actions: [
-            ElevatedButton(
-              onPressed: () {
-                Navigator.pop(context);
-                context.read<GameBloc>().add(GameLeave());
-                context.go('/lobby');
-              },
-              child: const Text('Back to Lobby'),
-            ),
-          ],
+        barrierColor: Colors.black87,
+        builder: (ctx) => _GameResultDialog(
+          gr: gr,
+          mySeat: context.read<GameBloc>().mySeat,
+          onBack: () {
+            Navigator.pop(ctx);
+            context.read<GameBloc>().add(GameLeave());
+            context.go('/lobby');
+          },
         ),
       );
     });
+  }
+}
+
+// ── Game Result Dialog ─────────────────────────────────────────────────────────
+class _GameResultDialog extends StatefulWidget {
+  final GameResultData gr;
+  final int mySeat;
+  final VoidCallback onBack;
+  const _GameResultDialog({required this.gr, required this.mySeat, required this.onBack});
+  @override
+  State<_GameResultDialog> createState() => _GameResultDialogState();
+}
+
+class _GameResultDialogState extends State<_GameResultDialog>
+    with TickerProviderStateMixin {
+  late final AnimationController _enterCtrl;
+  late final AnimationController _xpCtrl;
+  late final AnimationController _pulseCtrl;
+  late final Animation<double> _scaleIn;
+  late final Animation<double> _fadeIn;
+
+  @override
+  void initState() {
+    super.initState();
+    _enterCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 500));
+    _xpCtrl    = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200));
+    _pulseCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 900))
+      ..repeat(reverse: true);
+
+    _scaleIn = CurvedAnimation(parent: _enterCtrl, curve: Curves.elasticOut);
+    _fadeIn  = CurvedAnimation(parent: _enterCtrl, curve: Curves.easeOut);
+
+    _enterCtrl.forward();
+    // Delay XP bar animation so it runs after the dialog settles
+    Future.delayed(const Duration(milliseconds: 600), () {
+      if (mounted) _xpCtrl.forward();
+    });
+  }
+
+  @override
+  void dispose() {
+    _enterCtrl.dispose();
+    _xpCtrl.dispose();
+    _pulseCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final gr        = widget.gr;
+    final reward    = gr.myReward;
+    final isWinner  = gr.winnerSeat == widget.mySeat;
+
+    // XP progress bar: 0–500 per level, showing old → new within current level
+    const xpPerLevel  = 500;
+    final oldXpInLvl  = reward != null ? (reward.oldLevel > 1 ? reward.newXp - reward.xpEarned - (reward.oldLevel - 1) * xpPerLevel : reward.newXp - reward.xpEarned) : 0;
+    final newXpInLvl  = reward != null ? (reward.newXp - (reward.newLevel - 1) * xpPerLevel).clamp(0, xpPerLevel) : 0;
+    final oldPct      = (oldXpInLvl / xpPerLevel).clamp(0.0, 1.0).toDouble();
+    final newPct      = (newXpInLvl / xpPerLevel).clamp(0.0, 1.0).toDouble();
+
+    return ScaleTransition(
+      scale: _scaleIn,
+      child: FadeTransition(
+        opacity: _fadeIn,
+        child: Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 32),
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(24),
+              gradient: const LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Color(0xFF0E1A2E), Color(0xFF080F1A)],
+              ),
+              border: Border.all(
+                color: isWinner
+                    ? const Color(0xFFFFD700).withValues(alpha: 0.5)
+                    : const Color(0xFF1E3050),
+                width: isWinner ? 2 : 1,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: isWinner
+                      ? const Color(0xFFFFD700).withValues(alpha: 0.2)
+                      : Colors.black54,
+                  blurRadius: 32,
+                ),
+              ],
+            ),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // ── Win / Lose badge ────────────────────────────────
+                  AnimatedBuilder(
+                    animation: _pulseCtrl,
+                    builder: (_, child) => Transform.scale(
+                      scale: isWinner ? (1.0 + _pulseCtrl.value * 0.05) : 1.0,
+                      child: child,
+                    ),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(50),
+                        gradient: LinearGradient(
+                          colors: isWinner
+                              ? const [Color(0xFFFFD700), Color(0xFFFFA000)]
+                              : const [Color(0xFF334466), Color(0xFF1E2E44)],
+                        ),
+                        boxShadow: isWinner ? [
+                          BoxShadow(
+                            color: const Color(0xFFFFD700).withValues(alpha: 0.4),
+                            blurRadius: 18,
+                          ),
+                        ] : null,
+                      ),
+                      child: Text(
+                        isWinner ? '🏆  Victory!' : '😔  Defeat',
+                        style: TextStyle(
+                          color: isWinner ? Colors.black : Colors.white70,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    '${gr.winnerName} wins the game',
+                    style: const TextStyle(color: Color(0xFF7799BB), fontSize: 13),
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  // ── Scores table ────────────────────────────────────
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(14),
+                      color: const Color(0xFF060D18),
+                      border: Border.all(color: const Color(0xFF1A2840)),
+                    ),
+                    child: Column(
+                      children: gr.finalScores.entries.map((e) {
+                        final isMine = e.key == widget.mySeat;
+                        final isW    = e.key == gr.winnerSeat;
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: Row(children: [
+                            Container(
+                              width: 28, height: 28,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: isW
+                                    ? const Color(0xFFFFD700).withValues(alpha: 0.15)
+                                    : const Color(0xFF1A2840),
+                                border: Border.all(
+                                  color: isW
+                                      ? const Color(0xFFFFD700).withValues(alpha: 0.5)
+                                      : Colors.transparent,
+                                ),
+                              ),
+                              child: Center(
+                                child: Text(
+                                  isW ? '🏆' : 'S${e.key + 1}',
+                                  style: TextStyle(
+                                    fontSize: isW ? 12 : 10,
+                                    color: isMine ? Colors.white : const Color(0xFF7799BB),
+                                    fontWeight: isMine ? FontWeight.bold : FontWeight.normal,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                isMine ? 'You' : 'Seat ${e.key + 1}',
+                                style: TextStyle(
+                                  color: isMine ? Colors.white : const Color(0xFF7799BB),
+                                  fontWeight: isMine ? FontWeight.bold : FontWeight.normal,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                            Text(
+                              e.value >= 0 ? '+${e.value.toStringAsFixed(1)}' : e.value.toStringAsFixed(1),
+                              style: TextStyle(
+                                color: e.value >= 0 ? AppColors.primary : AppColors.danger,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ]),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+
+                  // ── Bet result ──────────────────────────────────────
+                  if (gr.hasBet) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(12),
+                        color: const Color(0xFF0D1A08),
+                        border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+                      ),
+                      child: Row(children: [
+                        const Text('💰', style: TextStyle(fontSize: 16)),
+                        const SizedBox(width: 10),
+                        Expanded(child: Text(
+                          'Pot: ₹${gr.totalPot.toStringAsFixed(0)}',
+                          style: const TextStyle(color: Colors.white70, fontSize: 13),
+                        )),
+                        Text(
+                          isWinner ? '+₹${gr.totalPot.toStringAsFixed(0)} won!' : '-₹${gr.betAmount.toStringAsFixed(0)}',
+                          style: TextStyle(
+                            color: isWinner ? AppColors.primary : AppColors.danger,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ]),
+                    ),
+                  ],
+
+                  // ── Rewards: XP + Coins ────────────────────────────
+                  if (reward != null) ...[
+                    const SizedBox(height: 16),
+
+                    // Level-up banner
+                    if (reward.leveledUp) ...[
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(12),
+                          gradient: const LinearGradient(
+                            colors: [Color(0xFFFFD700), Color(0xFFFFA000)],
+                          ),
+                        ),
+                        child: Column(children: [
+                          const Text('⬆️  LEVEL UP!',
+                              style: TextStyle(
+                                  color: Colors.black,
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 16,
+                                  letterSpacing: 1)),
+                          Text(
+                            'Level ${reward.oldLevel}  →  Level ${reward.newLevel}',
+                            style: const TextStyle(color: Colors.black87, fontSize: 12),
+                          ),
+                        ]),
+                      ),
+                      const SizedBox(height: 10),
+                    ],
+
+                    // XP + coins row
+                    Row(children: [
+                      Expanded(child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(12),
+                          color: const Color(0xFF0A1020),
+                          border: Border.all(color: const Color(0xFF1A2840)),
+                        ),
+                        child: Column(children: [
+                          Text(
+                            '+${reward.xpEarned} XP',
+                            style: const TextStyle(
+                                color: Color(0xFF88CCFF),
+                                fontSize: 16,
+                                fontWeight: FontWeight.w900),
+                          ),
+                          const Text('Experience', style: TextStyle(color: Color(0xFF4466AA), fontSize: 10)),
+                        ]),
+                      )),
+                      const SizedBox(width: 10),
+                      Expanded(child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(12),
+                          color: const Color(0xFF0A1020),
+                          border: Border.all(color: const Color(0xFF1A2840)),
+                        ),
+                        child: Column(children: [
+                          Text(
+                            '+${reward.coinsEarned} 🪙',
+                            style: const TextStyle(
+                                color: Color(0xFFFFD700),
+                                fontSize: 16,
+                                fontWeight: FontWeight.w900),
+                          ),
+                          const Text('Coins', style: TextStyle(color: Color(0xFF8B7020), fontSize: 10)),
+                        ]),
+                      )),
+                    ]),
+
+                    const SizedBox(height: 12),
+
+                    // XP progress bar
+                    Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                        Text(
+                          'Level ${reward.leveledUp ? reward.newLevel : reward.oldLevel}',
+                          style: const TextStyle(color: Color(0xFF7799BB), fontSize: 11),
+                        ),
+                        Text(
+                          '${reward.newXp} / ${reward.newLevel * 500} XP',
+                          style: const TextStyle(color: Color(0xFF7799BB), fontSize: 11),
+                        ),
+                      ]),
+                      const SizedBox(height: 6),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: Stack(children: [
+                          // Background
+                          Container(height: 10, color: const Color(0xFF1A2840)),
+                          // Old XP
+                          FractionallySizedBox(
+                            widthFactor: oldPct,
+                            child: Container(
+                              height: 10,
+                              decoration: const BoxDecoration(
+                                gradient: LinearGradient(colors: [Color(0xFF2244AA), Color(0xFF3366CC)]),
+                              ),
+                            ),
+                          ),
+                          // New XP gain animated
+                          AnimatedBuilder(
+                            animation: _xpCtrl,
+                            builder: (_, __) {
+                              final width = oldPct + (newPct - oldPct) * _xpCtrl.value;
+                              return FractionallySizedBox(
+                                widthFactor: width,
+                                child: Container(
+                                  height: 10,
+                                  decoration: const BoxDecoration(
+                                    gradient: LinearGradient(
+                                      colors: [Color(0xFF3399FF), Color(0xFF00CCFF)],
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ]),
+                      ),
+                    ]),
+                  ],
+
+                  const SizedBox(height: 20),
+
+                  // ── Back to Lobby button ────────────────────────────
+                  GestureDetector(
+                    onTap: widget.onBack,
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(14),
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFF1E3A5A), Color(0xFF162840)],
+                        ),
+                        border: Border.all(color: const Color(0xFF2A4A6A)),
+                      ),
+                      child: const Center(
+                        child: Text(
+                          '← Back to Lobby',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
