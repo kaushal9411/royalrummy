@@ -49,7 +49,7 @@ export default function UsersPage() {
       <div className="flex gap-3 mb-4">
         <input
           className="input flex-1"
-          placeholder="Search by username or email…"
+          placeholder="Search by username, email or mobile…"
           value={search}
           onChange={(e) => { setSearch(e.target.value); setPage(1); }}
         />
@@ -60,7 +60,7 @@ export default function UsersPage() {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-dark-border text-gray-400 text-left">
-              {['Username', 'Email', 'Provider', 'Level', 'Matches', 'Joined', 'Status', ''].map((h) => (
+              {['Username', 'Email', 'Mobile', 'Provider', 'Level', 'Matches', 'Joined', 'Status', ''].map((h) => (
                 <th key={h} className="px-4 py-3 font-medium">{h}</th>
               ))}
             </tr>
@@ -68,12 +68,13 @@ export default function UsersPage() {
           <tbody>
             {loading
               ? (
-                <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-500">Loading…</td></tr>
+                <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-500">Loading…</td></tr>
               )
               : users.map((u) => (
                 <tr key={u.id} className="border-b border-dark-border hover:bg-dark-bg transition-colors">
                   <td className="px-4 py-3 font-medium text-white">{u.username}</td>
                   <td className="px-4 py-3 text-gray-400">{u.email ?? '—'}</td>
+                  <td className="px-4 py-3 text-gray-400 font-mono text-xs">{u.mobile ?? '—'}</td>
                   <td className="px-4 py-3">
                     <span className={`badge ${
                       u.provider === 'google' ? 'bg-blue-500/20 text-blue-400' :

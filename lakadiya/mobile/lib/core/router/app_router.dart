@@ -3,8 +3,8 @@ import 'package:go_router/go_router.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../features/auth/presentation/bloc/auth_bloc.dart';
 import '../../features/auth/presentation/pages/login_page.dart';
-import '../../features/auth/presentation/pages/register_page.dart';
 import '../../features/lobby/presentation/pages/lobby_page.dart';
+import '../../features/splash/presentation/pages/splash_page.dart';
 import '../../features/lobby/presentation/pages/room_page.dart';
 import '../../features/game/presentation/pages/game_page.dart';
 import '../../features/profile/presentation/pages/profile_page.dart';
@@ -13,16 +13,19 @@ import '../../features/payments/presentation/bloc/payment_bloc.dart';
 import '../../features/payments/presentation/screens/wallet_screen.dart';
 import '../../features/payments/presentation/screens/add_money_screen.dart';
 import '../../features/payments/presentation/screens/withdraw_screen.dart';
+import '../../features/profile/presentation/pages/device_token_page.dart';
 
 final _rootKey = GlobalKey<NavigatorState>();
 
 GoRouter createRouter(AuthBloc authBloc, PaymentBloc paymentBloc) => GoRouter(
   navigatorKey: _rootKey,
-  initialLocation: '/lobby',
+  initialLocation: '/splash',
   redirect: (context, state) {
+    // Never redirect away from the splash screen
+    if (state.matchedLocation == '/splash') return null;
+
     final isAuth = authBloc.state is AuthAuthenticated;
-    final isAuthRoute = state.matchedLocation.startsWith('/login') ||
-                        state.matchedLocation.startsWith('/register');
+    final isAuthRoute = state.matchedLocation.startsWith('/login');
 
     if (!isAuth && !isAuthRoute) return '/login';
     if (isAuth && isAuthRoute) return '/lobby';
@@ -30,8 +33,9 @@ GoRouter createRouter(AuthBloc authBloc, PaymentBloc paymentBloc) => GoRouter(
   },
   refreshListenable: GoRouterRefreshStream(authBloc.stream),
   routes: [
+    GoRoute(path: '/splash',   builder: (_, __) => const SplashPage()),
     GoRoute(path: '/login',    builder: (_, __) => const LoginPage()),
-    GoRoute(path: '/register', builder: (_, __) => const RegisterPage()),
+    GoRoute(path: '/register', redirect: (_, __) => '/login'),
     GoRoute(path: '/lobby',    builder: (_, __) => const LobbyPage()),
     GoRoute(
       path: '/room/:roomId',
@@ -42,6 +46,7 @@ GoRouter createRouter(AuthBloc authBloc, PaymentBloc paymentBloc) => GoRouter(
       builder: (_, state) => GamePage(roomId: state.pathParameters['roomId']!),
     ),
     GoRoute(path: '/profile',     builder: (_, __) => const ProfilePage()),
+
     GoRoute(path: '/leaderboard', builder: (_, __) => const LeaderboardPage()),
 
     // Payment Routes — share the global PaymentBloc so balance stays in sync
@@ -65,6 +70,10 @@ GoRouter createRouter(AuthBloc authBloc, PaymentBloc paymentBloc) => GoRouter(
         value: paymentBloc,
         child: const WithdrawScreen(),
       ),
+    ),
+    GoRoute(
+      path: '/device-token',
+      builder: (_, __) => const DeviceTokenPage(),
     ),
   ],
 );

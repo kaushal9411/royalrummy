@@ -66,7 +66,7 @@ export const getAnalytics = async () => {
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface AdminUser {
-  id: string; username: string; email: string; provider: string;
+  id: string; username: string; email: string | null; mobile: string | null; provider: string;
   coins: number; xp: number; level: number;
   is_banned: boolean; created_at: string; last_seen: string;
   matches_played: number; matches_won: number;

@@ -9,6 +9,7 @@ const userRoutes = require('./modules/users/user.routes');
 const roomRoutes = require('./modules/rooms/room.routes');
 const leaderboardRoutes = require('./modules/leaderboard/leaderboard.routes');
 const paymentRoutes = require('./modules/payments/payment.routes');
+const notificationRoutes = require('./modules/notifications/notification.routes');
 const adminRoutes = require('./modules/admin/admin.routes');
 const { errorHandler, notFound } = require('./middleware/error.middleware');
 
@@ -32,6 +33,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/rooms', roomRoutes);
 app.use('/api/leaderboard', leaderboardRoutes);
 app.use('/api/payments', paymentRoutes);
+app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin', adminRoutes);
 
 app.use(notFound);

@@ -10,42 +10,35 @@ const handleValidation = (req, res) => {
   return true;
 };
 
-const register = async (req, res, next) => {
+const requestOtp = async (req, res, next) => {
   if (!handleValidation(req, res)) return;
   try {
-    const data = await authService.register(req.body);
-    res.status(201).json(data);
-  } catch (err) {
-    next(err);
-  }
+    const data = await authService.requestOtp(req.body);
+    res.json(data);
+  } catch (err) { next(err); }
 };
 
-const login = async (req, res, next) => {
+const verifyAndLogin = async (req, res, next) => {
   if (!handleValidation(req, res)) return;
   try {
-    const data = await authService.login(req.body);
+    const data = await authService.verifyAndLogin(req.body);
     res.json(data);
-  } catch (err) {
-    next(err);
-  }
+  } catch (err) { next(err); }
 };
 
 const guestLogin = async (req, res, next) => {
+  if (!handleValidation(req, res)) return;
   try {
-    const data = await authService.guestLogin();
+    const data = await authService.guestLogin(req.body);
     res.json(data);
-  } catch (err) {
-    next(err);
-  }
+  } catch (err) { next(err); }
 };
 
 const googleAuth = async (req, res, next) => {
   try {
     const data = await authService.googleAuth(req.body);
     res.json(data);
-  } catch (err) {
-    next(err);
-  }
+  } catch (err) { next(err); }
 };
 
 const adminLogin = async (req, res, next) => {
@@ -53,9 +46,7 @@ const adminLogin = async (req, res, next) => {
   try {
     const data = await authService.adminLogin(req.body);
     res.json(data);
-  } catch (err) {
-    next(err);
-  }
+  } catch (err) { next(err); }
 };
 
-module.exports = { register, login, guestLogin, googleAuth, adminLogin };
+module.exports = { requestOtp, verifyAndLogin, guestLogin, googleAuth, adminLogin };

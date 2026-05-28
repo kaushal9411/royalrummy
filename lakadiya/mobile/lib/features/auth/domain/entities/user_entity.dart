@@ -2,6 +2,7 @@ class UserEntity {
   final String id;
   final String username;
   final String? email;
+  final String? mobile;
   final String? avatarUrl;
   final int coins;
   final int xp;
@@ -12,6 +13,7 @@ class UserEntity {
     required this.id,
     required this.username,
     this.email,
+    this.mobile,
     this.avatarUrl,
     required this.coins,
     required this.xp,
@@ -26,8 +28,9 @@ class UserEntity {
         id:        json['id'] as String,
         username:  json['username'] as String,
         email:     json['email'] as String?,
+        mobile:    json['mobile'] as String?,
         avatarUrl: json['avatar_url'] as String?,
-        coins:     _i(json['coins'],  1000),
+        coins:     _i(json['coins'],  0),
         xp:        _i(json['xp'],     0),
         level:     _i(json['level'],  1),
         provider:  json['provider'] as String? ?? 'local',
@@ -37,6 +40,7 @@ class UserEntity {
         'id':         id,
         'username':   username,
         'email':      email,
+        'mobile':     mobile,
         'avatar_url': avatarUrl,
         'coins':      coins,
         'xp':         xp,

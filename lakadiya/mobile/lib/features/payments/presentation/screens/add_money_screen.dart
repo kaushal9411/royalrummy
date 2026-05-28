@@ -240,7 +240,7 @@ class _AddMoneyScreenState extends State<AddMoneyScreen>
       const SizedBox(width: 12),
       const Expanded(
         child: Text(
-          '₹1 = 10 coins  •  Powered by Razorpay  •  Secure & Instant',
+          '₹1 = 1 coin  •  Powered by Razorpay  •  Secure & Instant',
           style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
         ),
       ),
@@ -274,7 +274,7 @@ class _AddMoneyScreenState extends State<AddMoneyScreen>
   Widget _buildPremiumCard(double amt, bool loading) {
     final selected = _selectedQuick == amt;
     final label = _cardLabels[amt];
-    final coins = (amt * 10).toInt();
+    final coins = amt.toInt();
 
     return GestureDetector(
       onTap: loading ? null : () => setState(() {
@@ -507,7 +507,7 @@ class _FloatingPaymentCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final coins = (amount * 10).toInt();
+    final coins = amount.toInt();
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 20),
       decoration: BoxDecoration(

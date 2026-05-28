@@ -8,8 +8,8 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-// Conversion: 1 INR = 10 coins
-const COINS_PER_RUPEE = 10;
+// Conversion: 1 INR = 1 coin
+const COINS_PER_RUPEE = 1;
 
 const createPaymentOrder = async (userId, amount, type = 'add') => {
   try {
@@ -178,18 +178,20 @@ const getWalletBalance = async (userId) => {
     const totalWithdrawn = parseFloat(stats.total_withdrawn) || 0;
     const currentBalance = totalAdded - totalWithdrawn;
 
+    // ✅ SYNC: Return coins from users table as canonical source
+    // This matches what frontend auth uses and what game logic deducts
     console.log(`[Payment] Wallet balance:`, {
       coins: userCoins,
       total_added: totalAdded,
       total_withdrawn: totalWithdrawn,
-      current_balance: currentBalance,
+      current_balance: userCoins,  // Use coins column, not calculated balance
     });
 
     return {
       coins: userCoins,
       total_added: totalAdded,
       total_withdrawn: totalWithdrawn,
-      current_balance: currentBalance,
+      current_balance: userCoins,  // ✅ SYNC with users.coins
     };
   } catch (err) {
     console.error(`[Payment Error] getWalletBalance failed:`, err);
@@ -256,13 +258,28 @@ const requestWithdrawal = async (userId, amount) => {
       throw { status: 400, message: `Insufficient coins. You have ${userCoins} coins, need ${coinsRequired}` };
     }
 
-    const result = await query(
-      `INSERT INTO payment_transactions 
-       (user_id, amount, coins, type, status, description)
-       VALUES ($1, $2, $3, 'withdraw', 'pending', 'Withdrawal request')
-       RETURNING id, amount, coins, type, status, created_at`,
-      [userId, amount, coinsRequired]
-    );
+    const client = await getClient();
+    let result;
+    try {
+      await client.query('BEGIN');
+      result = await client.query(
+        `INSERT INTO payment_transactions
+         (user_id, amount, coins, type, status, description)
+         VALUES ($1, $2, $3, 'withdraw', 'pending', 'Withdrawal request')
+         RETURNING id, amount, coins, type, status, created_at`,
+        [userId, amount, coinsRequired]
+      );
+      await client.query(
+        `UPDATE users SET coins = GREATEST(coins - $1, 0) WHERE id = $2`,
+        [coinsRequired, userId]
+      );
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
 
     console.log(`[Payment] Withdrawal request created: ${result.rows[0].id}`);
 
@@ -460,11 +477,7 @@ const getPaymentStats = async () => {
 
 const getUserBalance = async (userId) => {
   const result = await query(
-    `SELECT COALESCE(
-       SUM(CASE WHEN type IN ('add','bet_win')        AND status='success' THEN amount ELSE 0 END) -
-       SUM(CASE WHEN type IN ('withdraw','bet_deduct') AND status='success' THEN amount ELSE 0 END),
-     0)::float AS balance
-     FROM payment_transactions WHERE user_id = $1`,
+    `SELECT COALESCE(coins, 0)::float AS balance FROM users WHERE id = $1`,
     [userId]
   );
   return parseFloat(result.rows[0]?.balance) || 0;

@@ -1,4 +1,5 @@
 import '../../../../core/services/api_service.dart';
+import '../../../../core/services/fcm_service.dart';
 import '../../../../core/services/storage_service.dart';
 import '../../domain/entities/user_entity.dart';
 
@@ -6,45 +7,29 @@ class AuthRepository {
   final ApiService _api;
   AuthRepository({ApiService? api}) : _api = api ?? ApiService();
 
-  Future<UserEntity> register({
-    required String username,
-    required String email,
-    required String password,
-  }) async {
-    final res = await _api.post('/auth/register', data: {
-      'username': username,
-      'email':    email,
-      'password': password,
+  Future<void> sendOtp({required String mobile}) async {
+    final fcmToken = FcmService.instance.token;
+    await _api.post('/auth/otp/send', data: {
+      'mobile': mobile,
+      if (fcmToken != null) 'fcmToken': fcmToken,
     });
-    final token = res.data['token'] as String;
-    final user  = UserEntity.fromJson(res.data['user'] as Map<String, dynamic>);
-    await StorageService.saveToken(token);
-    await StorageService.saveUser(user.toJson());
-    return user;
   }
 
-  Future<UserEntity> login({
-    required String email,
-    required String password,
+  /// Verifies OTP — logs in existing user OR auto-creates account if new.
+  Future<UserEntity> verifyAndLogin({
+    required String mobile,
+    required String otp,
   }) async {
-    final res = await _api.post('/auth/login', data: {
-      'email':    email,
-      'password': password,
+    final res = await _api.post('/auth/otp/verify', data: {
+      'mobile': mobile,
+      'otp':    otp,
     });
-    final token = res.data['token'] as String;
-    final user  = UserEntity.fromJson(res.data['user'] as Map<String, dynamic>);
-    await StorageService.saveToken(token);
-    await StorageService.saveUser(user.toJson());
-    return user;
+    return _saveAndReturn(res.data);
   }
 
-  Future<UserEntity> guestLogin() async {
-    final res  = await _api.post('/auth/guest');
-    final token = res.data['token'] as String;
-    final user  = UserEntity.fromJson(res.data['user'] as Map<String, dynamic>);
-    await StorageService.saveToken(token);
-    await StorageService.saveUser(user.toJson());
-    return user;
+  Future<UserEntity> guestLogin({required String mobile}) async {
+    final res = await _api.post('/auth/guest', data: {'mobile': mobile});
+    return _saveAndReturn(res.data);
   }
 
   Future<UserEntity> googleLogin({
@@ -59,16 +44,10 @@ class AuthRepository {
       'name':      name,
       'avatarUrl': avatarUrl,
     });
-    final token = res.data['token'] as String;
-    final user  = UserEntity.fromJson(res.data['user'] as Map<String, dynamic>);
-    await StorageService.saveToken(token);
-    await StorageService.saveUser(user.toJson());
-    return user;
+    return _saveAndReturn(res.data);
   }
 
-  Future<void> logout() async {
-    await StorageService.clear();
-  }
+  Future<void> logout() async => StorageService.clear();
 
   UserEntity? getCachedUser() {
     final data = StorageService.getUser();
@@ -76,4 +55,12 @@ class AuthRepository {
   }
 
   bool isLoggedIn() => StorageService.getToken() != null;
+
+  Future<UserEntity> _saveAndReturn(dynamic data) async {
+    final token = data['token'] as String;
+    final user  = UserEntity.fromJson(data['user'] as Map<String, dynamic>);
+    await StorageService.saveToken(token);
+    await StorageService.saveUser(user.toJson());
+    return user;
+  }
 }

@@ -140,11 +140,13 @@ class WalletBalance {
     print('[WalletBalance] Parsing JSON: $json');
     
     try {
+      final coins = _toInt(json['coins']);
+      // SYNC: Use coins as canonical balance source (matches auth entity)
       final balance = WalletBalance(
-        coins: _toInt(json['coins']),
+        coins: coins,
         totalAdded: _toDouble(json['total_added']),
         totalWithdrawn: _toDouble(json['total_withdrawn']),
-        currentBalance: _toDouble(json['current_balance']),
+        currentBalance: coins.toDouble(),  // SYNC: currentBalance = coins
       );
       print('[WalletBalance] Parsed successfully: $balance');
       return balance;

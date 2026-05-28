@@ -2,7 +2,7 @@ const { query } = require('../../config/database');
 
 const getProfile = async (userId) => {
   const result = await query(
-    `SELECT u.id, u.username, u.email, u.avatar_url, u.coins, u.xp, u.level,
+    `SELECT u.id, u.username, u.email, u.mobile, u.avatar_url, u.coins, u.xp, u.level,
             u.provider, u.created_at, u.last_seen,
             ps.matches_played, ps.matches_won, ps.total_score,
             ps.bids_exact, ps.bids_failed, ps.bids_over
@@ -15,7 +15,7 @@ const getProfile = async (userId) => {
   return result.rows[0];
 };
 
-const updateProfile = async (userId, { username, avatarUrl }) => {
+const updateProfile = async (userId, { username, email, avatarUrl }) => {
   if (username) {
     const taken = await query('SELECT id FROM users WHERE username = $1 AND id != $2', [username, userId]);
     if (taken.rows.length) throw { status: 409, message: 'Username taken' };
@@ -24,10 +24,11 @@ const updateProfile = async (userId, { username, avatarUrl }) => {
   const result = await query(
     `UPDATE users SET
        username   = COALESCE($1, username),
-       avatar_url = COALESCE($2, avatar_url)
-     WHERE id = $3
-     RETURNING id, username, avatar_url, coins, xp, level`,
-    [username || null, avatarUrl || null, userId]
+       email      = COALESCE($2, email),
+       avatar_url = COALESCE($3, avatar_url)
+     WHERE id = $4
+     RETURNING id, username, email, mobile, avatar_url, coins, xp, level, provider`,
+    [username || null, email || null, avatarUrl || null, userId]
   );
   return result.rows[0];
 };

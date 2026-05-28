@@ -21,16 +21,14 @@ void _showLoginRequiredSheet(BuildContext context) {
     isScrollControlled: true,
     barrierColor: Colors.black.withValues(alpha: 0.7),
     builder: (_) => _LoginRequiredSheet(
-      onLogin:    () { Navigator.pop(context); context.go('/login'); },
-      onRegister: () { Navigator.pop(context); context.go('/register'); },
+      onLogin: () { Navigator.pop(context); context.go('/login'); },
     ),
   );
 }
 
 class _LoginRequiredSheet extends StatelessWidget {
   final VoidCallback onLogin;
-  final VoidCallback onRegister;
-  const _LoginRequiredSheet({required this.onLogin, required this.onRegister});
+  const _LoginRequiredSheet({required this.onLogin});
 
   @override
   Widget build(BuildContext context) {
@@ -92,7 +90,6 @@ class _LoginRequiredSheet extends StatelessWidget {
             ),
             const SizedBox(height: 20),
 
-            // Title
             const Text(
               'Login Required',
               style: TextStyle(
@@ -103,8 +100,7 @@ class _LoginRequiredSheet extends StatelessWidget {
             ),
             const SizedBox(height: 10),
 
-            // Subtitle
-            Text(
+            const Text(
               'You need to be logged in to add money,\nwithdraw, or view your wallet.',
               textAlign: TextAlign.center,
               style: TextStyle(
@@ -115,7 +111,6 @@ class _LoginRequiredSheet extends StatelessWidget {
             ),
             const SizedBox(height: 28),
 
-            // Feature hint row
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
@@ -152,7 +147,7 @@ class _LoginRequiredSheet extends StatelessWidget {
                     Icon(Icons.login_rounded, color: Colors.white, size: 20),
                     SizedBox(width: 10),
                     Text(
-                      'Login to Continue',
+                      'Login with Mobile',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 16,
@@ -163,38 +158,8 @@ class _LoginRequiredSheet extends StatelessWidget {
                 ),
               ),
             ),
-            const SizedBox(height: 12),
-
-            // Register button
-            GestureDetector(
-              onTap: onRegister,
-              child: Container(
-                height: 50,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: AppColors.primary.withValues(alpha: 0.4)),
-                  color: AppColors.primary.withValues(alpha: 0.06),
-                ),
-                child: const Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.person_add_rounded, color: AppColors.primary, size: 18),
-                    SizedBox(width: 8),
-                    Text(
-                      'Create New Account',
-                      style: TextStyle(
-                        color: AppColors.primary,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
             const SizedBox(height: 14),
 
-            // Cancel
             GestureDetector(
               onTap: () => Navigator.pop(context),
               child: const Text(

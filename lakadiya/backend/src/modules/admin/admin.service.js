@@ -23,7 +23,7 @@ const getUsers = async ({ page = 1, limit = 20, search = '', banned = null }) =>
 
   if (search) {
     params.push(`%${search}%`);
-    whereClause += ` AND (u.username ILIKE $${params.length} OR u.email ILIKE $${params.length})`;
+    whereClause += ` AND (u.username ILIKE $${params.length} OR u.email ILIKE $${params.length} OR u.mobile ILIKE $${params.length})`;
   }
   if (banned !== null) {
     params.push(banned);
@@ -32,7 +32,7 @@ const getUsers = async ({ page = 1, limit = 20, search = '', banned = null }) =>
 
   params.push(limit, offset);
   const result = await query(
-    `SELECT u.id, u.username, u.email, u.provider, u.coins, u.xp, u.level,
+    `SELECT u.id, u.username, u.email, u.mobile, u.provider, u.coins, u.xp, u.level,
             u.is_banned, u.created_at, u.last_seen,
             ps.matches_played, ps.matches_won
      FROM users u
