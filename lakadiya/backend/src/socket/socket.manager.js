@@ -19,6 +19,10 @@ function initSocket(server) {
 
   io.on('connection', (socket) => {
     logger.debug(`Socket connected: ${socket.id} user:${socket.userId}`);
+    
+    // Join user-specific room for direct notifications
+    socket.join(`user:${socket.userId}`);
+    
     registerGameSocket(io, socket);
 
     socket.on('disconnect', (reason) => {

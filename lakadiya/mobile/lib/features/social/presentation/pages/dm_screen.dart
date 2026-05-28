@@ -109,18 +109,34 @@ class _DmScreenState extends State<DmScreen> {
   void _send() {
     final text = _msgCtl.text.trim();
     if (text.isEmpty) return;
+    
+    // Add message to list immediately (optimistic update)
+    final myMsg = {
+      'sender_id': _myId,
+      'receiver_id': widget.userId,
+      'text': text,
+      'sender_name': 'You',
+      'created_at': DateTime.now().toIso8601String(),
+    };
+    
+    setState(() {
+      _messages.add(myMsg);
+      _showEmoji = false;
+    });
+    
     _msgCtl.clear();
-    setState(() => _showEmoji = false);
+    _scrollToBottom();
     SocketService().sendPrivateMessage(widget.userId, text);
   }
 
   void _sendEmoji(String e) {
-    SocketService().sendPrivateMessage(widget.userId, e);
+    _msgCtl.text += e;
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      resizeToAvoidBottomInset: true,
       backgroundColor: const Color(0xFF050B15),
       appBar: AppBar(
         backgroundColor: const Color(0xFF07101C),
@@ -145,87 +161,90 @@ class _DmScreenState extends State<DmScreen> {
           ],
         ),
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: _loading
-                ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
-                : _messages.isEmpty
-                    ? const Center(
-                        child: Text('Say hello!', style: TextStyle(color: Colors.white38, fontSize: 16)))
-                    : ListView.builder(
-                        controller: _scroll,
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                        itemCount: _messages.length,
-                        itemBuilder: (_, i) => _BubbleRow(
-                          msg: _messages[i],
-                          isMe: _messages[i]['sender_id'] == _myId,
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          children: [
+            Expanded(
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
+                  : _messages.isEmpty
+                      ? const Center(
+                          child: Text('Say hello!', style: TextStyle(color: Colors.white38, fontSize: 16)))
+                      : ListView.builder(
+                          controller: _scroll,
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          itemCount: _messages.length,
+                          itemBuilder: (_, i) => _BubbleRow(
+                            msg: _messages[i],
+                            isMe: _messages[i]['sender_id'] == _myId,
+                          ),
                         ),
-                      ),
-          ),
-          // Emoji quick-pick
-          if (_showEmoji)
-            Container(
-              height: 52,
-              color: const Color(0xFF0A1520),
-              child: ListView.builder(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                itemCount: _kEmojis.length,
-                itemBuilder: (_, i) => GestureDetector(
-                  onTap: () { _sendEmoji(_kEmojis[i]); setState(() => _showEmoji = false); },
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-                    child: Text(_kEmojis[i], style: const TextStyle(fontSize: 26)),
+            ),
+            // Emoji quick-pick
+            if (_showEmoji)
+              Container(
+                height: 52,
+                color: const Color(0xFF0A1520),
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  itemCount: _kEmojis.length,
+                  itemBuilder: (_, i) => GestureDetector(
+                    onTap: () => _sendEmoji(_kEmojis[i]),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                      child: Text(_kEmojis[i], style: const TextStyle(fontSize: 26)),
+                    ),
                   ),
                 ),
               ),
-            ),
-          // Input bar
-          Container(
-            color: const Color(0xFF07101C),
-            padding: EdgeInsets.fromLTRB(12, 8, 12, MediaQuery.of(context).viewInsets.bottom + 8),
-            child: Row(
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.emoji_emotions_outlined, color: AppColors.accent),
-                  onPressed: () => setState(() => _showEmoji = !_showEmoji),
-                ),
-                Expanded(
-                  child: TextField(
-                    controller: _msgCtl,
-                    style: const TextStyle(color: Colors.white),
-                    onSubmitted: (_) => _send(),
-                    textInputAction: TextInputAction.send,
-                    decoration: InputDecoration(
-                      hintText: 'Message…',
-                      hintStyle: const TextStyle(color: Colors.white38),
-                      filled: true,
-                      fillColor: const Color(0xFF0D1827),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(24),
-                        borderSide: BorderSide.none,
+            // Input bar
+            Container(
+              color: const Color(0xFF07101C),
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+              child: Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.emoji_emotions_outlined, color: AppColors.accent),
+                    onPressed: () => setState(() => _showEmoji = !_showEmoji),
+                  ),
+                  Expanded(
+                    child: TextField(
+                      controller: _msgCtl,
+                      style: const TextStyle(color: Colors.white),
+                      onSubmitted: (_) => _send(),
+                      textInputAction: TextInputAction.send,
+                      decoration: InputDecoration(
+                        hintText: 'Message…',
+                        hintStyle: const TextStyle(color: Colors.white38),
+                        filled: true,
+                        fillColor: const Color(0xFF0D1827),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(24),
+                          borderSide: BorderSide.none,
+                        ),
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                GestureDetector(
-                  onTap: _send,
-                  child: Container(
-                    width: 42, height: 42,
-                    decoration: const BoxDecoration(
-                      color: AppColors.primary,
-                      shape: BoxShape.circle,
+                  const SizedBox(width: 8),
+                  GestureDetector(
+                    onTap: _send,
+                    child: Container(
+                      width: 42, height: 42,
+                      decoration: const BoxDecoration(
+                        color: AppColors.primary,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.send_rounded, color: Colors.white, size: 18),
                     ),
-                    child: const Icon(Icons.send_rounded, color: Colors.white, size: 18),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

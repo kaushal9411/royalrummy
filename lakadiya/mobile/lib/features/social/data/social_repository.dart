@@ -17,6 +17,17 @@ class SocialRepository {
   Future<void> sendFriendRequest(String userId) =>
       _api.post('/users/friends/$userId');
 
+  Future<List<Map<String, dynamic>>> getPendingRequests() async {
+    final res = await _api.get('/users/me/friend-requests');
+    return (res.data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  Future<void> acceptFriendRequest(String userId) =>
+      _api.post('/users/friends/$userId/accept');
+
+  Future<void> declineFriendRequest(String userId) =>
+      _api.post('/users/friends/$userId/decline');
+
   Future<List<Map<String, dynamic>>> getConversationList() async {
     final res = await _api.get('/messages');
     return (res.data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();

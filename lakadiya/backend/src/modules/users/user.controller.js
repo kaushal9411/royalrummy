@@ -1,4 +1,6 @@
 const userService = require('./user.service');
+const { getIO } = require('../../socket/socket.manager');
+const { sendNotification } = require('../notifications/notification.service');
 
 const getMe = async (req, res, next) => {
   try {
@@ -25,14 +27,111 @@ const getMatchHistory = async (req, res, next) => {
 const sendFriendRequest = async (req, res, next) => {
   try {
     await userService.sendFriendRequest(req.user.id, req.params.userId);
+    
+    const recipientId = req.params.userId;
+    
+    // Emit socket event to recipient for real-time update
+    try {
+      const io = getIO();
+      io.to(`user:${recipientId}`).emit('friend_request', {
+        fromUserId: req.user.id,
+        fromUsername: req.user.username,
+      });
+    } catch (socketErr) {
+      console.log('Socket emit error:', socketErr.message);
+    }
+    
+    // Send FCM push notification to recipient
+    try {
+      await sendNotification(
+        recipientId,
+        'Friend Request',
+        `${req.user.username} sent you a friend request`,
+        {
+          type: 'friend_request',
+          fromUserId: req.user.id,
+          fromUsername: req.user.username,
+          action: 'FRIEND_REQUEST',
+        },
+        'social_channel'
+      );
+    } catch (notifErr) {
+      console.log('Notification send error:', notifErr.message);
+    }
+    
     res.json({ message: 'Friend request sent' });
   } catch (err) { next(err); }
 };
 
 const acceptFriendRequest = async (req, res, next) => {
   try {
-    await userService.acceptFriendRequest(req.user.id, req.params.userId);
+    const requesterId = req.params.userId;
+    await userService.acceptFriendRequest(req.user.id, requesterId);
+    
+    // Emit socket event to the friend who sent the request
+    try {
+      const io = getIO();
+      io.to(`user:${requesterId}`).emit('friend_accepted', {
+        userId: req.user.id,
+        username: req.user.username,
+      });
+    } catch (socketErr) {
+      console.log('Socket emit error:', socketErr.message);
+    }
+    
+    // Send FCM push notification to requester
+    try {
+      await sendNotification(
+        requesterId,
+        'Friend Request Accepted',
+        `${req.user.username} accepted your friend request`,
+        {
+          type: 'friend_accepted',
+          userId: req.user.id,
+          username: req.user.username,
+          action: 'FRIEND_ACCEPTED',
+        },
+        'social_channel'
+      );
+    } catch (notifErr) {
+      console.log('Notification send error:', notifErr.message);
+    }
+    
     res.json({ message: 'Friend request accepted' });
+  } catch (err) { next(err); }
+};
+
+const declineFriendRequest = async (req, res, next) => {
+  try {
+    const requesterId = req.params.userId;
+    await userService.declineFriendRequest(req.user.id, requesterId);
+    
+    // Send FCM push notification to requester
+    try {
+      await sendNotification(
+        requesterId,
+        'Friend Request Declined',
+        `${req.user.username} declined your friend request`,
+        {
+          type: 'friend_declined',
+          userId: req.user.id,
+          username: req.user.username,
+          action: 'FRIEND_DECLINED',
+        },
+        'social_channel'
+      );
+    } catch (notifErr) {
+      console.log('Notification send error:', notifErr.message);
+    }
+    
+    res.json({ message: 'Friend request declined' });
+  } catch (err) { next(err); }
+};
+
+const getPendingRequests = async (req, res, next) => {
+  try {
+    const requests = await userService.getPendingRequests(req.user.id);
+    res.json(requests);
   } catch (err) { next(err); }
 };
 
@@ -67,7 +166,7 @@ const searchUsers = async (req, res, next) => {
 
 module.exports = {
   getMe, updateProfile, getMatchHistory,
-  sendFriendRequest, acceptFriendRequest, getFriends,
+  sendFriendRequest, acceptFriendRequest, declineFriendRequest, getPendingRequests, getFriends,
   getNotifications, markNotificationsRead,
   searchUsers,
 };

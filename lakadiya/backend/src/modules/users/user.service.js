@@ -88,6 +88,26 @@ const acceptFriendRequest = async (userId, friendId) => {
   }
 };
 
+const declineFriendRequest = async (userId, friendId) => {
+  await query(
+    `DELETE FROM friendships
+     WHERE user_id = $1 AND friend_id = $2 AND status = 'pending'`,
+    [friendId, userId]
+  );
+};
+
+const getPendingRequests = async (userId) => {
+  const result = await query(
+    `SELECT f.id, f.user_id as from_user_id, u.username as from_user_name, u.avatar_url as from_user_avatar, u.level, f.created_at
+     FROM friendships f
+     JOIN users u ON u.id = f.user_id
+     WHERE f.friend_id = $1 AND f.status = 'pending'
+     ORDER BY f.created_at DESC`,
+    [userId]
+  );
+  return result.rows;
+};
+
 const getFriends = async (userId) => {
   const result = await query(
     `SELECT u.id, u.username, u.avatar_url, u.level, u.last_seen, f.status
@@ -129,7 +149,7 @@ const searchUsers = async (currentUserId, q, limit = 30) => {
 
 module.exports = {
   getProfile, updateProfile, getMatchHistory,
-  sendFriendRequest, acceptFriendRequest, getFriends,
+  sendFriendRequest, acceptFriendRequest, declineFriendRequest, getPendingRequests, getFriends,
   getNotifications, markNotificationsRead,
   searchUsers,
 };

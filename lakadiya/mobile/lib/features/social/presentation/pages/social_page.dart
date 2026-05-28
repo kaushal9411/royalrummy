@@ -20,18 +20,20 @@ class _SocialPageState extends State<SocialPage>
 
   List<Map<String, dynamic>> _players = [];
   List<Map<String, dynamic>> _friends = [];
+  List<Map<String, dynamic>> _pendingRequests = [];
   List<Map<String, dynamic>> _convos = [];
   bool _loading = true;
 
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 3, vsync: this);
+    _tabs = TabController(length: 4, vsync: this);
     _tabs.addListener(() { if (mounted) setState(() {}); });
     _load();
 
     SocketService().on('private_message', _onIncomingMessage);
     SocketService().on('game_invite', _onGameInvite);
+    SocketService().on('friend_request', _onFriendRequest);
   }
 
   @override
@@ -41,6 +43,7 @@ class _SocialPageState extends State<SocialPage>
     _debounce?.cancel();
     SocketService().off('private_message');
     SocketService().off('game_invite');
+    SocketService().off('friend_request');
     super.dispose();
   }
 
@@ -50,13 +53,15 @@ class _SocialPageState extends State<SocialPage>
       final results = await Future.wait([
         _repo.searchUsers(''),
         _repo.getFriends(),
+        _repo.getPendingRequests(),
         _repo.getConversationList(),
       ]);
       if (mounted) {
         setState(() {
           _players = results[0];
           _friends = results[1];
-          _convos  = results[2];
+          _pendingRequests = results[2];
+          _convos  = results[3];
           _loading = false;
         });
       }
@@ -117,6 +122,13 @@ class _SocialPageState extends State<SocialPage>
     );
   }
 
+  void _onFriendRequest(dynamic data) {
+    if (!mounted) return;
+    _repo.getPendingRequests().then((list) {
+      if (mounted) setState(() => _pendingRequests = list);
+    });
+  }
+
   void _openDm(Map<String, dynamic> user) {
     context.go('/dm/${user['id']}', extra: user['username'] ?? 'Player');
   }
@@ -129,6 +141,83 @@ class _SocialPageState extends State<SocialPage>
         duration: const Duration(seconds: 2),
       ),
     );
+  }
+
+  void _sendFriendRequest(Map<String, dynamic> user) async {
+    try {
+      await _repo.sendFriendRequest(user['id']);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Friend request sent to ${user['username']}'),
+            backgroundColor: AppColors.primary,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to send request: $e'),
+            backgroundColor: AppColors.danger,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    }
+  }
+
+  void _acceptFriendRequest(Map<String, dynamic> request) async {
+    try {
+      await _repo.acceptFriendRequest(request['from_user_id']);
+      if (mounted) {
+        await _load();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Friend request accepted!'),
+            backgroundColor: AppColors.primary,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to accept request: $e'),
+            backgroundColor: AppColors.danger,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    }
+  }
+
+  void _declineFriendRequest(Map<String, dynamic> request) async {
+    try {
+      await _repo.declineFriendRequest(request['from_user_id']);
+      if (mounted) {
+        setState(() => _pendingRequests.removeWhere((r) => r['from_user_id'] == request['from_user_id']));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Friend request declined'),
+            backgroundColor: AppColors.primary,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to decline request: $e'),
+            backgroundColor: AppColors.danger,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -158,9 +247,11 @@ class _SocialPageState extends State<SocialPage>
           indicatorColor: AppColors.primary,
           labelColor: AppColors.primary,
           unselectedLabelColor: Colors.white38,
+          isScrollable: true,
           tabs: [
             const Tab(text: 'Players'),
             Tab(text: 'Friends (${_friends.length})'),
+            Tab(text: 'Requests (${_pendingRequests.length})'),
             const Tab(text: 'Messages'),
           ],
         ),
@@ -203,8 +294,9 @@ class _SocialPageState extends State<SocialPage>
                 : TabBarView(
                     controller: _tabs,
                     children: [
-                      _PlayersList(players: _players, onDm: _openDm, onInvite: _sendInvite),
-                      _PlayersList(players: _friends, onDm: _openDm, onInvite: _sendInvite),
+                      _PlayersList(players: _players, onDm: _openDm, onInvite: _sendFriendRequest, isFriendsTab: false),
+                      _PlayersList(players: _friends, onDm: _openDm, onInvite: _sendInvite, isFriendsTab: true),
+                      _PendingRequestsList(requests: _pendingRequests, onAccept: _acceptFriendRequest, onDecline: _declineFriendRequest),
                       _ConvoList(convos: _convos, onOpen: _openDm),
                     ],
                   ),
@@ -221,8 +313,9 @@ class _PlayersList extends StatelessWidget {
   final List<Map<String, dynamic>> players;
   final void Function(Map<String, dynamic>) onDm;
   final void Function(Map<String, dynamic>) onInvite;
+  final bool isFriendsTab;
 
-  const _PlayersList({required this.players, required this.onDm, required this.onInvite});
+  const _PlayersList({required this.players, required this.onDm, required this.onInvite, required this.isFriendsTab});
 
   @override
   Widget build(BuildContext context) {
@@ -233,7 +326,7 @@ class _PlayersList extends StatelessWidget {
     return ListView.builder(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       itemCount: players.length,
-      itemBuilder: (_, i) => _PlayerCard(player: players[i], onDm: onDm, onInvite: onInvite),
+      itemBuilder: (_, i) => _PlayerCard(player: players[i], onDm: onDm, onInvite: onInvite, isFriendsTab: isFriendsTab),
     );
   }
 }
@@ -242,8 +335,9 @@ class _PlayerCard extends StatelessWidget {
   final Map<String, dynamic> player;
   final void Function(Map<String, dynamic>) onDm;
   final void Function(Map<String, dynamic>) onInvite;
+  final bool isFriendsTab;
 
-  const _PlayerCard({required this.player, required this.onDm, required this.onInvite});
+  const _PlayerCard({required this.player, required this.onDm, required this.onInvite, required this.isFriendsTab});
 
   @override
   Widget build(BuildContext context) {
@@ -308,7 +402,7 @@ class _PlayerCard extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               _IconBtn(
-                icon: Icons.sports_esports_rounded,
+                icon: isFriendsTab ? Icons.sports_esports_rounded : Icons.person_add_rounded,
                 color: AppColors.accent,
                 onTap: () => onInvite(player),
               ),
@@ -316,6 +410,90 @@ class _PlayerCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ── Pending Requests list ────────────────────────────────────────────────────
+
+class _PendingRequestsList extends StatelessWidget {
+  final List<Map<String, dynamic>> requests;
+  final void Function(Map<String, dynamic>) onAccept;
+  final void Function(Map<String, dynamic>) onDecline;
+
+  const _PendingRequestsList({
+    required this.requests,
+    required this.onAccept,
+    required this.onDecline,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (requests.isEmpty) {
+      return const Center(
+        child: Text('No pending requests', style: TextStyle(color: Colors.white38)));
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      itemCount: requests.length,
+      itemBuilder: (_, i) {
+        final req = requests[i];
+        final avatar = req['from_user_avatar'] as String?;
+        return Container(
+          margin: const EdgeInsets.only(bottom: 10),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0D1827),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+          ),
+          child: Row(
+            children: [
+              CircleAvatar(
+                radius: 24,
+                backgroundColor: AppColors.primary.withValues(alpha: 0.2),
+                backgroundImage: avatar != null ? NetworkImage(avatar) : null,
+                child: avatar == null
+                    ? Text(
+                        (req['from_user_name'] as String? ?? 'P')[0].toUpperCase(),
+                        style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold),
+                      )
+                    : null,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(req['from_user_name'] ?? 'Player',
+                        style: const TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                    const SizedBox(height: 4),
+                    const Text('sent you a friend request',
+                        style: TextStyle(color: Colors.white38, fontSize: 12)),
+                  ],
+                ),
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _IconBtn(
+                    icon: Icons.close_rounded,
+                    color: AppColors.danger,
+                    onTap: () => onDecline(req),
+                  ),
+                  const SizedBox(width: 8),
+                  _IconBtn(
+                    icon: Icons.check_rounded,
+                    color: AppColors.primary,
+                    onTap: () => onAccept(req),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

@@ -9,8 +9,10 @@ router.get('/me', controller.getMe);
 router.patch('/me', controller.updateProfile);
 router.get('/me/matches', controller.getMatchHistory);
 router.get('/me/friends', controller.getFriends);
+router.get('/me/friend-requests', controller.getPendingRequests);
 router.post('/friends/:userId', controller.sendFriendRequest);
-router.patch('/friends/:userId/accept', controller.acceptFriendRequest);
+router.post('/friends/:userId/accept', controller.acceptFriendRequest);
+router.post('/friends/:userId/decline', controller.declineFriendRequest);
 router.get('/notifications', controller.getNotifications);
 router.patch('/notifications/read', controller.markNotificationsRead);
 

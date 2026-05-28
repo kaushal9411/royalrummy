@@ -1,4 +1,6 @@
 const service = require('./message.service');
+const { getIO } = require('../../socket/socket.manager');
+const { sendNotification } = require('../notifications/notification.service');
 
 const getConversation = async (req, res, next) => {
   try {
@@ -16,7 +18,43 @@ const sendMessage = async (req, res, next) => {
     const { userId } = req.params;
     const { text } = req.body;
     if (!text?.trim()) return res.status(400).json({ error: 'Message text required' });
+    
     const msg = await service.sendMessage(req.user.id, userId, text);
+    
+    // Emit socket event to recipient for real-time delivery
+    try {
+      const io = getIO();
+      io.to(`user:${userId}`).emit('private_message', {
+        id: msg.id,
+        sender_id: msg.sender_id,
+        sender_name: req.user.username,
+        receiver_id: msg.receiver_id,
+        text: msg.text,
+        created_at: msg.created_at,
+      });
+    } catch (socketErr) {
+      console.log('Socket emit error:', socketErr.message);
+    }
+    
+    // Send FCM push notification to recipient
+    try {
+      await sendNotification(
+        userId,
+        req.user.username,
+        msg.text.substring(0, 100),
+        {
+          type: 'private_message',
+          senderId: req.user.id,
+          senderName: req.user.username,
+          messageText: msg.text,
+          action: 'MESSAGE_RECEIVED',
+        },
+        'message_channel'
+      );
+    } catch (notifErr) {
+      console.log('Notification send error:', notifErr.message);
+    }
+    
     res.json(msg);
   } catch (err) { next(err); }
 };
