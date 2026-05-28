@@ -499,11 +499,10 @@ const escrowBets = async (roomId, matchId) => {
   const realPlayers = playersResult.rows;
   if (realPlayers.length < 2) return { betAmount: 0, totalPot: 0, players: [] };
 
-  // Validate balances before touching any account
+  // Validate each player has enough balance to cover the bet
   for (const p of realPlayers) {
     const balance = await getUserBalance(p.user_id);
-    if (balance <= 100) throw { status: 400, message: 'All players must have a wallet balance above ₹100 to play a bet game' };
-    if (balance < betAmount) throw { status: 400, message: `A player has insufficient wallet balance for this bet (need ₹${betAmount})` };
+    if (balance < betAmount) throw { status: 400, message: `A player has insufficient balance for this bet (need ₹${betAmount})` };
   }
 
   const client = await getClient();

@@ -22,11 +22,10 @@ const generateCode = () =>
 const createRoom = async (hostId, isPrivate = false, betAmount = 0) => {
   const safeBet = VALID_BET_AMOUNTS.includes(Number(betAmount)) ? Number(betAmount) : 0;
 
-  // If paid room, validate host's wallet balance
+  // If paid room, validate host has enough balance to cover the bet
   if (safeBet > 0) {
     const balance = await _getUserBalance(hostId);
-    if (balance <= 100) throw { status: 400, message: 'You need a wallet balance above ₹100 to create a bet game' };
-    if (balance < safeBet) throw { status: 400, message: `Insufficient wallet balance to create a ₹${safeBet} bet game` };
+    if (balance < safeBet) throw { status: 400, message: `Insufficient balance. You need ₹${safeBet} to create this bet room` };
   }
 
   let code;
@@ -74,8 +73,7 @@ const joinRoom = async (userId, code) => {
   const betAmount = parseFloat(room.bet_amount) || 0;
   if (betAmount > 0) {
     const balance = await _getUserBalance(userId);
-    if (balance <= 100) throw { status: 400, message: 'You need a wallet balance above ₹100 to join this bet game' };
-    if (balance < betAmount) throw { status: 400, message: `Insufficient wallet balance. Need ₹${betAmount} to join this game` };
+    if (balance < betAmount) throw { status: 400, message: `Insufficient balance. You need ₹${betAmount} to join this room` };
   }
 
   const players = await query(
