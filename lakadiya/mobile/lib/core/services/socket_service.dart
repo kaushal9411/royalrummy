@@ -68,6 +68,12 @@ class SocketService {
   void sendEmoji(String roomId, String emoji) =>
       emit('send_emoji', {'roomId': roomId, 'emoji': emoji});
 
+  void sendPrivateMessage(String toUserId, String text) =>
+      emit('private_message', {'toUserId': toUserId, 'text': text});
+
+  void sendGameInvite(String toUserId, String roomId, String roomCode) =>
+      emit('send_game_invite', {'toUserId': toUserId, 'roomId': roomId, 'roomCode': roomCode});
+
   void _log(String msg) {
     // ignore: avoid_print
     print('[Socket] $msg');

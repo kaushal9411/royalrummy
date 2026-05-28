@@ -192,9 +192,13 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
         ),
         actions: [
           IconButton(
-            icon:
-                const Icon(Icons.leaderboard_rounded, color: AppColors.accent),
+            icon: const Icon(Icons.leaderboard_rounded, color: AppColors.accent),
             onPressed: () => context.go('/leaderboard'),
+          ),
+          IconButton(
+            icon: const Icon(Icons.people_rounded, color: AppColors.accentLight),
+            onPressed: () => context.go('/social'),
+            tooltip: 'Players & Chat',
           ),
           IconButton(
             icon: const Icon(Icons.person_rounded, color: AppColors.primary),

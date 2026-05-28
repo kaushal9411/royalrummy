@@ -457,6 +457,51 @@ function registerGameSocket(io, socket) {
     io.to(roomId).emit('emoji_reaction', { userId, emoji });
   });
 
+  // ── Direct message between users ──
+  socket.on('private_message', async ({ toUserId, text }) => {
+    if (!text?.trim() || !toUserId) return;
+    try {
+      const msgService = require('../modules/messages/message.service');
+      const msg = await msgService.sendMessage(userId, toUserId, text.trim());
+      // Save in-app notification so recipient sees it in their notification list
+      query(
+        `INSERT INTO notifications (user_id, type, title, body, data)
+         VALUES ($1, 'private_message', $2, $3, $4)`,
+        [toUserId, socket.username,
+         text.trim().substring(0, 100),
+         JSON.stringify({ fromUserId: userId, messageId: msg.id })]
+      ).catch(() => {});
+      // Real-time delivery to recipient's personal room
+      io.to(userRoom(toUserId)).emit('private_message', msg);
+      // Echo back to sender so their DM screen updates immediately
+      socket.emit('private_message', msg);
+    } catch (err) {
+      logger.error('private_message error', err);
+    }
+  });
+
+  // ── Game invite ──
+  socket.on('send_game_invite', async ({ toUserId, roomId, roomCode }) => {
+    if (!toUserId || !roomId) return;
+    try {
+      await query(
+        `INSERT INTO notifications (user_id, type, title, body, data)
+         VALUES ($1, 'game_invite', 'Game Invite', $2, $3)`,
+        [toUserId,
+         `${socket.username} invited you to play!`,
+         JSON.stringify({ fromUserId: userId, roomId, roomCode })]
+      );
+      io.to(userRoom(toUserId)).emit('game_invite', {
+        fromUserId: userId,
+        fromUsername: socket.username,
+        roomId,
+        roomCode,
+      });
+    } catch (err) {
+      logger.error('send_game_invite error', err);
+    }
+  });
+
   // ── Leave room ──
   socket.on('leave_room', ({ roomId }) => {
     socket.leave(roomId);

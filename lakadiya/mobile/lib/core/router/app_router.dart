@@ -14,6 +14,8 @@ import '../../features/payments/presentation/screens/wallet_screen.dart';
 import '../../features/payments/presentation/screens/add_money_screen.dart';
 import '../../features/payments/presentation/screens/withdraw_screen.dart';
 import '../../features/profile/presentation/pages/device_token_page.dart';
+import '../../features/social/presentation/pages/social_page.dart';
+import '../../features/social/presentation/pages/dm_screen.dart';
 
 final _rootKey = GlobalKey<NavigatorState>();
 
@@ -74,6 +76,17 @@ GoRouter createRouter(AuthBloc authBloc, PaymentBloc paymentBloc) => GoRouter(
     GoRoute(
       path: '/device-token',
       builder: (_, __) => const DeviceTokenPage(),
+    ),
+    GoRoute(
+      path: '/social',
+      builder: (_, __) => const SocialPage(),
+    ),
+    GoRoute(
+      path: '/dm/:userId',
+      builder: (_, state) => DmScreen(
+        userId: state.pathParameters['userId']!,
+        username: state.extra as String? ?? 'Player',
+      ),
     ),
   ],
 );

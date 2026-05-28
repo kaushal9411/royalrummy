@@ -114,8 +114,22 @@ const markNotificationsRead = async (userId) => {
   await query('UPDATE notifications SET is_read = TRUE WHERE user_id = $1', [userId]);
 };
 
+const searchUsers = async (currentUserId, q, limit = 30) => {
+  const result = await query(
+    `SELECT id, username, avatar_url, level, xp
+     FROM users
+     WHERE id != $1
+       AND (username ILIKE $2 OR $2 = '')
+     ORDER BY level DESC, username
+     LIMIT $3`,
+    [currentUserId, q ? `%${q}%` : '', limit]
+  );
+  return result.rows;
+};
+
 module.exports = {
   getProfile, updateProfile, getMatchHistory,
   sendFriendRequest, acceptFriendRequest, getFriends,
   getNotifications, markNotificationsRead,
+  searchUsers,
 };

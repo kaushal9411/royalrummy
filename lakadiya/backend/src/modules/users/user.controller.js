@@ -57,8 +57,17 @@ const markNotificationsRead = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+const searchUsers = async (req, res, next) => {
+  try {
+    const { q = '', limit = 30 } = req.query;
+    const users = await userService.searchUsers(req.user.id, q, Math.min(Number(limit), 50));
+    res.json(users);
+  } catch (err) { next(err); }
+};
+
 module.exports = {
   getMe, updateProfile, getMatchHistory,
   sendFriendRequest, acceptFriendRequest, getFriends,
   getNotifications, markNotificationsRead,
+  searchUsers,
 };

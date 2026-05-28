@@ -4,6 +4,7 @@ const controller = require('./user.controller');
 
 router.use(authenticate);
 
+router.get('/search',    controller.searchUsers);
 router.get('/me', controller.getMe);
 router.patch('/me', controller.updateProfile);
 router.get('/me/matches', controller.getMatchHistory);

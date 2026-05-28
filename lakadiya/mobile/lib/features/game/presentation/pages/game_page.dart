@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:audioplayers/audioplayers.dart';
+import '../../../auth/presentation/bloc/auth_bloc.dart';
+import '../../../../core/services/socket_service.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../domain/entities/card_entity.dart';
 import '../../domain/entities/game_state_entity.dart';
@@ -50,6 +52,21 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
   TrickResultData? _lastTriggered;
   bool _gameWinSoundPlayed = false;
 
+  // ── In-room chat ──
+  bool _chatOpen = false;
+  int _unreadChat = 0;
+  final List<Map<String, dynamic>> _chatMessages = [];
+  final List<String> _floatingEmojis = [];
+  final TextEditingController _chatInputCtl = TextEditingController();
+  final ScrollController _chatScrollCtl = ScrollController();
+
+  // ── In-game private DMs ──
+  String? _myUserId;
+  final Map<String, List<Map<String, dynamic>>> _inboxMsgs = {};
+  final List<Map<String, dynamic>> _dmToasts = [];
+  bool _inboxOpen = false;
+  String? _inboxSelectedUser; // userId → messages sub-view
+
   @override
   void initState() {
     super.initState();
@@ -67,6 +84,65 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
       }
     });
     context.read<GameBloc>().add(GameJoinRoom(widget.roomId, 0));
+
+    SocketService().on('chat_message', _onRoomChat);
+    SocketService().on('emoji_reaction', _onEmojiReaction);
+    SocketService().on('private_message', _onInGamePrivateMsg);
+
+    final authState = context.read<AuthBloc>().state;
+    if (authState is AuthAuthenticated) _myUserId = authState.user.id;
+  }
+
+  void _onRoomChat(dynamic data) {
+    if (!mounted) return;
+    final msg = Map<String, dynamic>.from(data as Map);
+    setState(() {
+      _chatMessages.add(msg);
+      if (!_chatOpen) _unreadChat++;
+    });
+    if (_chatOpen) _scrollChatToBottom();
+  }
+
+  void _onEmojiReaction(dynamic data) {
+    if (!mounted) return;
+    final emoji = (data as Map)['emoji'] as String? ?? '😊';
+    setState(() => _floatingEmojis.add(emoji));
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _floatingEmojis.remove(emoji));
+    });
+  }
+
+  void _scrollChatToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_chatScrollCtl.hasClients) {
+        _chatScrollCtl.animateTo(
+          _chatScrollCtl.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  void _onInGamePrivateMsg(dynamic data) {
+    if (!mounted) return;
+    final msg = Map<String, dynamic>.from(data as Map);
+    final senderId = msg['sender_id'] as String?;
+    // Ignore echo of my own sent messages
+    if (senderId == null || senderId == _myUserId) return;
+
+    final toastId = DateTime.now().millisecondsSinceEpoch;
+    final toast = Map<String, dynamic>.from(msg)..['\$toastId'] = toastId;
+
+    setState(() {
+      _inboxMsgs[senderId] ??= [];
+      _inboxMsgs[senderId]!.add(msg);
+      _dmToasts.add(toast);
+    });
+
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _dmToasts.removeWhere((t) => t['\$toastId'] == toastId));
+    });
   }
 
   @override
@@ -76,6 +152,11 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
       DeviceOrientation.portraitDown,
     ]);
     _trickAnimCtrl.dispose();
+    _chatInputCtl.dispose();
+    _chatScrollCtl.dispose();
+    SocketService().off('chat_message');
+    SocketService().off('emoji_reaction');
+    SocketService().off('private_message');
     _Sfx.cleanup();
     super.dispose();
   }
@@ -192,19 +273,19 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
         SafeArea(
           child: Column(
             children: [
-              _buildTopRow(gs, topP, topSeat, gs.bids[topSeat],
+              _buildTopRow(context, gs, topP, topSeat, gs.bids[topSeat],
                   gs.tricksWon[topSeat] ?? 0, botCards),
               Expanded(
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    _buildSideBot(leftP, leftSeat, gs.bids[leftSeat],
+                    _buildSideBot(context, leftP, leftSeat, gs.bids[leftSeat],
                         gs.tricksWon[leftSeat] ?? 0, botCards,
                         isLeft: true, isTurn: gs.currentTurn == leftSeat),
                     Expanded(
                       child: _buildTrickArea(gs, gs.isMyTurn && gs.isPlaying),
                     ),
-                    _buildSideBot(rightP, rightSeat, gs.bids[rightSeat],
+                    _buildSideBot(context, rightP, rightSeat, gs.bids[rightSeat],
                         gs.tricksWon[rightSeat] ?? 0, botCards,
                         isLeft: false, isTurn: gs.currentTurn == rightSeat),
                   ],
@@ -220,79 +301,298 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
             mySeat: mySeat,
             animation: _trickAnimCtrl,
           ),
+        if (_chatOpen)
+          Positioned(
+            top: 68, right: 0, bottom: 110,
+            width: 220,
+            child: _ChatPanel(
+              messages: _chatMessages,
+              scrollCtl: _chatScrollCtl,
+              inputCtl: _chatInputCtl,
+              roomId: widget.roomId,
+              onClose: () => setState(() => _chatOpen = false),
+            ),
+          ),
+        if (_floatingEmojis.isNotEmpty)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: Stack(
+                children: _floatingEmojis
+                    .map((e) => _FloatingEmoji(key: ValueKey(e + DateTime.now().millisecondsSinceEpoch.toString()), emoji: e))
+                    .toList(),
+              ),
+            ),
+          ),
+        // ── Inbox panel (left side, DMs received) ───────────────────────
+        if (_inboxOpen)
+          Positioned(
+            top: 68, left: 0, bottom: 110,
+            width: 210,
+            child: _InboxPanel(
+              inbox: _inboxMsgs,
+              selectedUserId: _inboxSelectedUser,
+              onSelectUser: (uid) => setState(() => _inboxSelectedUser = uid),
+              onBack: () => setState(() => _inboxSelectedUser = null),
+              onClose: () => setState(() { _inboxOpen = false; _inboxSelectedUser = null; }),
+              onOpenDm: (uid, uname) { setState(() { _inboxOpen = false; _inboxSelectedUser = null; }); context.go('/dm/$uid', extra: uname); },
+            ),
+          ),
+        // ── DM toast notifications ───────────────────────────────────────
+        if (_dmToasts.isNotEmpty)
+          Positioned(
+            top: 72, left: 0, right: 0,
+            child: IgnorePointer(
+              ignoring: false,
+              child: Column(
+                children: _dmToasts.map((t) => _DmToastBubble(
+                  toast: t,
+                  onTap: () {
+                    final uid = t['sender_id'] as String?;
+                    final name = t['sender_name'] as String? ?? 'Player';
+                    if (uid != null) { setState(() => _dmToasts.remove(t)); context.go('/dm/$uid', extra: name); }
+                  },
+                  onDismiss: () => setState(() => _dmToasts.remove(t)),
+                )).toList(),
+              ),
+            ),
+          ),
       ],
     );
   }
 
+  // suit → display symbol + color
+  static const Map<String, String> _suitSymbol = {'S':'♠','H':'♥','D':'♦','C':'♣'};
+  static const Map<String, Color>  _suitColor  = {
+    'S': Colors.white, 'H': Color(0xFFFF5555),
+    'D': Color(0xFFFF5555), 'C': Colors.white,
+  };
+
+  // ── Quick-DM bottom sheet ──────────────────────────────────────────────────
+  void _showQuickDmSheet(BuildContext ctx, PlayerInfo player) {
+    if (player.userId == null || player.isBot) return;
+    final ctl = TextEditingController();
+    showModalBottomSheet(
+      context: ctx,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: const BoxDecoration(
+            color: Color(0xFF0D1827),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(children: [
+                CircleAvatar(
+                  radius: 16,
+                  backgroundColor: AppColors.primary.withValues(alpha: 0.2),
+                  child: Text(player.username[0].toUpperCase(),
+                      style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
+                ),
+                const SizedBox(width: 10),
+                Text('Message ${player.username}',
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+              ]),
+              const SizedBox(height: 12),
+              TextField(
+                controller: ctl,
+                autofocus: true,
+                style: const TextStyle(color: Colors.white),
+                onSubmitted: (text) {
+                  if (text.trim().isEmpty) return;
+                  SocketService().sendPrivateMessage(player.userId!, text.trim());
+                  Navigator.pop(ctx);
+                },
+                decoration: InputDecoration(
+                  hintText: 'Type a message…',
+                  hintStyle: const TextStyle(color: Colors.white38),
+                  filled: true,
+                  fillColor: const Color(0xFF0A1525),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  onPressed: () {
+                    final text = ctl.text.trim();
+                    if (text.isEmpty) return;
+                    SocketService().sendPrivateMessage(player.userId!, text);
+                    Navigator.pop(ctx);
+                  },
+                  child: const Text('Send', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   // ── Top row ────────────────────────────────────────────────────────────────
-  Widget _buildTopRow(GameStateEntity gs, PlayerInfo? player, int seat,
-      int? bid, int tricks, int cardCount) {
+  Widget _buildTopRow(BuildContext ctx, GameStateEntity gs, PlayerInfo? player,
+      int seat, int? bid, int tricks, int cardCount) {
+    final inboxCount = _inboxMsgs.length;
     return SizedBox(
       height: 68,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
+          // ── Left: Close + Trump badge ──────────────────────────────────
           Padding(
-            padding: const EdgeInsets.all(6),
-            child: GestureDetector(
-              onTap: () {
-                context.read<GameBloc>().add(GameLeave());
-                context.go('/lobby');
-              },
-              child: Container(
-                width: 34, height: 34,
-                decoration: BoxDecoration(
-                  color: Colors.black45,
-                  borderRadius: BorderRadius.circular(8),
+            padding: const EdgeInsets.fromLTRB(4, 4, 0, 4),
+            child: Row(children: [
+              GestureDetector(
+                onTap: () { context.read<GameBloc>().add(GameLeave()); context.go('/lobby'); },
+                child: Container(
+                  width: 32, height: 32,
+                  decoration: BoxDecoration(color: Colors.black45, borderRadius: BorderRadius.circular(8)),
+                  child: const Icon(Icons.close_rounded, color: Colors.white, size: 17),
                 ),
-                child: const Icon(Icons.close_rounded, color: Colors.white, size: 18),
               ),
-            ),
+              const SizedBox(width: 4),
+              // Trump indicator ♠ always trump in Spades
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
+                ),
+                child: const Column(mainAxisSize: MainAxisSize.min, children: [
+                  Text('♠', style: TextStyle(color: Colors.white, fontSize: 13, height: 1)),
+                  Text('TRUMP', style: TextStyle(color: Colors.white54, fontSize: 7, height: 1.1)),
+                ]),
+              ),
+              // Led suit indicator (only when a trick is active)
+              if (gs.ledSuit != null) ...[
+                const SizedBox(width: 3),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
+                  ),
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    Text(_suitSymbol[gs.ledSuit] ?? gs.ledSuit!,
+                        style: TextStyle(color: _suitColor[gs.ledSuit] ?? Colors.white, fontSize: 13, height: 1)),
+                    const Text('LED', style: TextStyle(color: Colors.white54, fontSize: 7, height: 1.1)),
+                  ]),
+                ),
+              ],
+            ]),
           ),
+          // ── Center: top player + optional DM icon ─────────────────────
           Expanded(
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 _CardFan(cardCount, baseRotation: math.pi),
-                const SizedBox(width: 10),
+                const SizedBox(width: 8),
                 if (player != null) ...[
-                  Text(player.username,
+                  Flexible(child: Text(player.username,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 11,
-                          shadows: [Shadow(color: Colors.black54, blurRadius: 4)])),
-                  const SizedBox(width: 6),
+                          color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11,
+                          shadows: [Shadow(color: Colors.black54, blurRadius: 4)]))),
+                  const SizedBox(width: 4),
                   _ScoreBadge(tricks, bid: bid, isTurn: gs.currentTurn == seat),
+                  if (!player.isBot && player.userId != null) ...[
+                    const SizedBox(width: 4),
+                    GestureDetector(
+                      onTap: () => _showQuickDmSheet(ctx, player),
+                      child: Container(
+                        width: 24, height: 24,
+                        decoration: BoxDecoration(
+                          color: AppColors.primary.withValues(alpha: 0.18),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: AppColors.primary.withValues(alpha: 0.4)),
+                        ),
+                        child: const Icon(Icons.mail_outline_rounded, color: AppColors.primary, size: 13),
+                      ),
+                    ),
+                  ],
                 ],
               ],
             ),
           ),
+          // ── Right: Inbox + Chat buttons ───────────────────────────────
           Padding(
-            padding: const EdgeInsets.all(6),
-            child: Container(
-              width: 34, height: 34,
-              decoration: BoxDecoration(
-                color: Colors.black45,
-                borderRadius: BorderRadius.circular(8),
+            padding: const EdgeInsets.fromLTRB(0, 4, 4, 4),
+            child: Row(children: [
+              // Inbox (received DMs)
+              GestureDetector(
+                onTap: () => setState(() { _inboxOpen = !_inboxOpen; _inboxSelectedUser = null; }),
+                child: Stack(clipBehavior: Clip.none, children: [
+                  Container(
+                    width: 32, height: 32,
+                    decoration: BoxDecoration(
+                      color: _inboxOpen ? AppColors.accent.withValues(alpha: 0.3) : Colors.black45,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.inbox_rounded, color: Colors.white, size: 17),
+                  ),
+                  if (inboxCount > 0)
+                    Positioned(right: -2, top: -2,
+                      child: Container(
+                        width: 14, height: 14,
+                        decoration: const BoxDecoration(color: AppColors.danger, shape: BoxShape.circle),
+                        child: Center(child: Text('$inboxCount',
+                            style: const TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.bold))),
+                      )),
+                ]),
               ),
-              child: const Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text('♠', style: TextStyle(color: Colors.white, fontSize: 14)),
-                  Text('T', style: TextStyle(color: Colors.white60, fontSize: 8)),
-                ],
+              const SizedBox(width: 4),
+              // Room chat
+              GestureDetector(
+                onTap: () => setState(() {
+                  _chatOpen = !_chatOpen;
+                  if (_chatOpen) { _unreadChat = 0; _scrollChatToBottom(); }
+                }),
+                child: Stack(clipBehavior: Clip.none, children: [
+                  Container(
+                    width: 32, height: 32,
+                    decoration: BoxDecoration(
+                      color: _chatOpen ? AppColors.primary.withValues(alpha: 0.3) : Colors.black45,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.chat_bubble_outline_rounded, color: Colors.white, size: 17),
+                  ),
+                  if (_unreadChat > 0)
+                    Positioned(right: -2, top: -2,
+                      child: Container(
+                        width: 14, height: 14,
+                        decoration: const BoxDecoration(color: AppColors.danger, shape: BoxShape.circle),
+                        child: Center(child: Text('$_unreadChat',
+                            style: const TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.bold))),
+                      )),
+                ]),
               ),
-            ),
+            ]),
           ),
         ],
       ),
     );
   }
 
-  // ── Side bot ────────────────────────────────────────────────────────────────
-  Widget _buildSideBot(PlayerInfo? player, int seat, int? bid, int tricks,
-      int cardCount, {required bool isLeft, required bool isTurn}) {
+  // ── Side player column ─────────────────────────────────────────────────────
+  Widget _buildSideBot(BuildContext ctx, PlayerInfo? player, int seat, int? bid,
+      int tricks, int cardCount, {required bool isLeft, required bool isTurn}) {
     return Container(
       width: 68,
       padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 3),
@@ -305,13 +605,27 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
             Text(player.username,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 10,
+                    color: Colors.white, fontWeight: FontWeight.bold, fontSize: 10,
                     shadows: [Shadow(color: Colors.black54, blurRadius: 4)]),
                 overflow: TextOverflow.ellipsis),
             const SizedBox(height: 3),
             _ScoreBadge(tricks, bid: bid, isTurn: isTurn),
+            // DM button — only for real (non-bot) players
+            if (!player.isBot && player.userId != null) ...[
+              const SizedBox(height: 4),
+              GestureDetector(
+                onTap: () => _showQuickDmSheet(ctx, player),
+                child: Container(
+                  width: 26, height: 22,
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: AppColors.primary.withValues(alpha: 0.35)),
+                  ),
+                  child: const Icon(Icons.mail_outline_rounded, color: AppColors.primary, size: 12),
+                ),
+              ),
+            ],
           ],
         ],
       ),
@@ -1469,4 +1783,376 @@ class _WoodPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_) => false;
+}
+
+// ── In-room chat panel ────────────────────────────────────────────────────────
+class _ChatPanel extends StatelessWidget {
+  final List<Map<String, dynamic>> messages;
+  final ScrollController scrollCtl;
+  final TextEditingController inputCtl;
+  final String roomId;
+  final VoidCallback onClose;
+
+  const _ChatPanel({
+    required this.messages,
+    required this.scrollCtl,
+    required this.inputCtl,
+    required this.roomId,
+    required this.onClose,
+  });
+
+  void _send() {
+    final text = inputCtl.text.trim();
+    if (text.isEmpty) return;
+    SocketService().sendChat(roomId, text);
+    inputCtl.clear();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.82),
+        border: Border(left: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
+      ),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
+            ),
+            child: Row(children: [
+              const Icon(Icons.chat_bubble_rounded, color: AppColors.primary, size: 13),
+              const SizedBox(width: 6),
+              const Expanded(
+                child: Text('Room Chat',
+                    style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+              ),
+              GestureDetector(
+                onTap: onClose,
+                child: const Icon(Icons.close_rounded, color: Colors.white38, size: 15),
+              ),
+            ]),
+          ),
+          Expanded(
+            child: messages.isEmpty
+                ? const Center(
+                    child: Text('No messages yet',
+                        style: TextStyle(color: Colors.white24, fontSize: 10)))
+                : ListView.builder(
+                    controller: scrollCtl,
+                    padding: const EdgeInsets.all(8),
+                    itemCount: messages.length,
+                    itemBuilder: (_, i) {
+                      final m = messages[i];
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 5),
+                        child: RichText(
+                          text: TextSpan(children: [
+                            TextSpan(
+                              text: '${m['username']}: ',
+                              style: const TextStyle(
+                                  color: AppColors.accentLight,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold),
+                            ),
+                            TextSpan(
+                              text: m['message'] as String? ?? '',
+                              style: const TextStyle(color: Colors.white70, fontSize: 10),
+                            ),
+                          ]),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
+            ),
+            child: Row(children: [
+              Expanded(
+                child: SizedBox(
+                  height: 28,
+                  child: TextField(
+                    controller: inputCtl,
+                    style: const TextStyle(color: Colors.white, fontSize: 11),
+                    onSubmitted: (_) => _send(),
+                    textInputAction: TextInputAction.send,
+                    decoration: InputDecoration(
+                      hintText: 'Message…',
+                      hintStyle: const TextStyle(color: Colors.white24, fontSize: 10),
+                      filled: true,
+                      fillColor: Colors.white.withValues(alpha: 0.07),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
+              GestureDetector(
+                onTap: _send,
+                child: Container(
+                  width: 26, height: 26,
+                  decoration: const BoxDecoration(
+                      color: AppColors.primary, shape: BoxShape.circle),
+                  child: const Icon(Icons.send_rounded, color: Colors.white, size: 12),
+                ),
+              ),
+            ]),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Floating emoji reaction ───────────────────────────────────────────────────
+class _FloatingEmoji extends StatefulWidget {
+  final String emoji;
+  const _FloatingEmoji({super.key, required this.emoji});
+  @override
+  State<_FloatingEmoji> createState() => _FloatingEmojiState();
+}
+
+class _FloatingEmojiState extends State<_FloatingEmoji>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _fade;
+  late final Animation<double> _rise;
+  final double _x = 0.15 + math.Random().nextDouble() * 0.55;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this, duration: const Duration(seconds: 3));
+    _fade = Tween<double>(begin: 1, end: 0)
+        .animate(CurvedAnimation(parent: _ctrl, curve: const Interval(0.6, 1.0)));
+    _rise = Tween<double>(begin: 0, end: 1)
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+    _ctrl.forward();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (_, child) => Positioned(
+        left: MediaQuery.of(context).size.width * _x,
+        bottom: 120 + _rise.value * 180,
+        child: Opacity(opacity: _fade.value, child: child!),
+      ),
+      child: Text(widget.emoji, style: const TextStyle(fontSize: 30)),
+    );
+  }
+}
+
+// ── DM toast bubble (fades after 3 s) ────────────────────────────────────────
+class _DmToastBubble extends StatelessWidget {
+  final Map<String, dynamic> toast;
+  final VoidCallback onTap;
+  final VoidCallback onDismiss;
+  const _DmToastBubble({required this.toast, required this.onTap, required this.onDismiss});
+
+  @override
+  Widget build(BuildContext context) {
+    final name = toast['sender_name'] as String? ?? 'Player';
+    final text = toast['text'] as String? ?? '';
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: const Color(0xDD0D1827),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: AppColors.primary.withValues(alpha: 0.4)),
+          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.5), blurRadius: 8)],
+        ),
+        child: Row(children: [
+          const Icon(Icons.mail_rounded, color: AppColors.primary, size: 16),
+          const SizedBox(width: 8),
+          Expanded(
+            child: RichText(
+              overflow: TextOverflow.ellipsis,
+              text: TextSpan(children: [
+                TextSpan(text: '$name: ',
+                    style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold, fontSize: 12)),
+                TextSpan(text: text,
+                    style: const TextStyle(color: Colors.white70, fontSize: 12)),
+              ]),
+            ),
+          ),
+          const SizedBox(width: 6),
+          GestureDetector(
+            onTap: onDismiss,
+            child: const Icon(Icons.close_rounded, color: Colors.white38, size: 14),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+// ── Inbox panel (received DMs, left side) ────────────────────────────────────
+class _InboxPanel extends StatelessWidget {
+  final Map<String, List<Map<String, dynamic>>> inbox;
+  final String? selectedUserId;
+  final void Function(String uid) onSelectUser;
+  final VoidCallback onBack;
+  final VoidCallback onClose;
+  final void Function(String uid, String name) onOpenDm;
+
+  const _InboxPanel({
+    required this.inbox,
+    required this.selectedUserId,
+    required this.onSelectUser,
+    required this.onBack,
+    required this.onClose,
+    required this.onOpenDm,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.88),
+        border: Border(right: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
+      ),
+      child: selectedUserId == null ? _buildList() : _buildMessages(),
+    );
+  }
+
+  Widget _header(String title, {bool showBack = false}) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+    decoration: BoxDecoration(
+      border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
+    ),
+    child: Row(children: [
+      if (showBack) GestureDetector(
+        onTap: onBack,
+        child: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white54, size: 13),
+      ) else const Icon(Icons.inbox_rounded, color: AppColors.accent, size: 13),
+      const SizedBox(width: 6),
+      Expanded(child: Text(title,
+          style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold))),
+      GestureDetector(onTap: onClose,
+          child: const Icon(Icons.close_rounded, color: Colors.white38, size: 14)),
+    ]),
+  );
+
+  Widget _buildList() {
+    final senders = inbox.keys.toList();
+    if (senders.isEmpty) {
+      return Column(children: [
+        _header('Inbox'),
+        const Expanded(child: Center(
+          child: Text('No messages', style: TextStyle(color: Colors.white24, fontSize: 10)))),
+      ]);
+    }
+    return Column(children: [
+      _header('Inbox (${senders.length})'),
+      Expanded(
+        child: ListView.builder(
+          padding: const EdgeInsets.all(6),
+          itemCount: senders.length,
+          itemBuilder: (_, i) {
+            final uid = senders[i];
+            final msgs = inbox[uid]!;
+            final name = msgs.last['sender_name'] as String? ?? 'Player';
+            final lastText = msgs.last['text'] as String? ?? '';
+            return GestureDetector(
+              onTap: () => onSelectUser(uid),
+              child: Container(
+                margin: const EdgeInsets.only(bottom: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
+                ),
+                child: Row(children: [
+                  CircleAvatar(radius: 14,
+                    backgroundColor: AppColors.primary.withValues(alpha: 0.2),
+                    child: Text(name[0].toUpperCase(),
+                        style: const TextStyle(color: AppColors.primary, fontSize: 10, fontWeight: FontWeight.bold))),
+                  const SizedBox(width: 8),
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(name, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                    Text(lastText, style: const TextStyle(color: Colors.white38, fontSize: 9),
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                  ])),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                    decoration: BoxDecoration(color: AppColors.primary, borderRadius: BorderRadius.circular(8)),
+                    child: Text('${msgs.length}',
+                        style: const TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.bold)),
+                  ),
+                ]),
+              ),
+            );
+          },
+        ),
+      ),
+    ]);
+  }
+
+  Widget _buildMessages() {
+    final msgs = inbox[selectedUserId] ?? [];
+    final name = msgs.isNotEmpty ? msgs.first['sender_name'] as String? ?? 'Player' : 'Player';
+    return Column(children: [
+      _header(name, showBack: true),
+      Expanded(
+        child: ListView.builder(
+          padding: const EdgeInsets.all(8),
+          itemCount: msgs.length + 1,
+          itemBuilder: (_, i) {
+            if (i == msgs.length) {
+              return GestureDetector(
+                onTap: () => onOpenDm(selectedUserId!, name),
+                child: Container(
+                  margin: const EdgeInsets.only(top: 6),
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppColors.primary.withValues(alpha: 0.4)),
+                  ),
+                  child: const Center(
+                    child: Text('Open Full Chat →',
+                        style: TextStyle(color: AppColors.primary, fontSize: 10, fontWeight: FontWeight.bold))),
+                ),
+              );
+            }
+            final m = msgs[i];
+            final text = m['text'] as String? ?? '';
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 5),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.06),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(text,
+                    style: const TextStyle(color: Colors.white70, fontSize: 10)),
+              ),
+            );
+          },
+        ),
+      ),
+    ]);
+  }
 }

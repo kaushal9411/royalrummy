@@ -11,6 +11,7 @@ const leaderboardRoutes = require('./modules/leaderboard/leaderboard.routes');
 const paymentRoutes = require('./modules/payments/payment.routes');
 const notificationRoutes = require('./modules/notifications/notification.routes');
 const adminRoutes = require('./modules/admin/admin.routes');
+const messageRoutes = require('./modules/messages/message.routes');
 const { getSettings } = require('./modules/admin/settings.service');
 const { errorHandler, notFound } = require('./middleware/error.middleware');
 
@@ -36,6 +37,7 @@ app.use('/api/leaderboard', leaderboardRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/messages', messageRoutes);
 
 // Public settings — no auth required, mobile app fetches on startup
 app.get('/api/settings/public', async (req, res, next) => {
