@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const { query } = require('../../config/database');
 const logger = require('../../config/logger');
 const { sendOtp, verifyOtp } = require('./otp.service');
+const { getSettings } = require('../admin/settings.service');
 
 // Ensure mobile column exists
 query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS mobile VARCHAR(15) UNIQUE`).catch(() => {});
@@ -12,14 +13,14 @@ const generateToken = (userId, username, isAdmin = false) =>
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   });
 
-const WELCOME_BONUS = 50;
-
 const _creditWelcomeBonus = async (userId) => {
-  await query(`UPDATE users SET coins = coins + $1 WHERE id = $2`, [WELCOME_BONUS, userId]);
+  const { welcome_bonus } = await getSettings();
+  const bonus = parseInt(welcome_bonus) || 50;
+  await query(`UPDATE users SET coins = coins + $1 WHERE id = $2`, [bonus, userId]);
   await query(
     `INSERT INTO payment_transactions (user_id, amount, coins, type, status, description)
      VALUES ($1, $2, $3, 'add', 'success', 'Welcome bonus')`,
-    [userId, WELCOME_BONUS, WELCOME_BONUS]
+    [userId, bonus, bonus]
   );
 };
 
@@ -41,6 +42,10 @@ const requestOtp = async ({ mobile, fcmToken }) => {
 
 // ─── OTP: verify → login OR auto-register ─────────────────────────────────────
 const verifyAndLogin = async ({ mobile, otp }) => {
+  const settings = await getSettings();
+  if (settings.maintenance_mode)
+    throw { status: 503, message: 'Platform is under maintenance. Please try again later.' };
+
   await verifyOtp(mobile, otp);
 
   // Find any existing user by mobile (including guests who may have registered earlier)
@@ -61,7 +66,10 @@ const verifyAndLogin = async ({ mobile, otp }) => {
       [mobile]
     );
   } else if (!userResult.rows.length) {
-    // No account at all — auto-register
+    // No account at all — check if registration is enabled
+    if (!settings.registration_enabled)
+      throw { status: 403, message: 'New registrations are currently disabled.' };
+
     let username = _randomUsername();
     while ((await query('SELECT id FROM users WHERE username = $1', [username])).rows.length) {
       username = _randomUsername();
@@ -111,6 +119,9 @@ const verifyAndLogin = async ({ mobile, otp }) => {
 // ─── Guest: find-or-create by mobile, no OTP ──────────────────────────────────
 const guestLogin = async ({ mobile } = {}) => {
   if (!mobile) throw { status: 400, message: 'Mobile number is required' };
+  const settings = await getSettings();
+  if (settings.maintenance_mode)
+    throw { status: 503, message: 'Platform is under maintenance. Please try again later.' };
 
   // Check if any user (real or guest) already exists with this mobile
   const existing = await query(
@@ -192,5 +203,4 @@ module.exports = {
   guestLogin,
   googleAuth,
   adminLogin,
-  WELCOME_BONUS,
 };

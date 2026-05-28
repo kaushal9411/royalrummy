@@ -65,4 +65,7 @@ const sendOtpViaFcm = async (fcmToken, otp) => {
   logger.info(`[Firebase] OTP notification sent (token: ...${fcmToken.slice(-6)})`);
 };
 
-module.exports = { sendOtpViaFcm };
+// Returns true if Firebase is ready, false if not configured
+const ensureFirebase = () => _init();
+
+module.exports = { sendOtpViaFcm, ensureFirebase };

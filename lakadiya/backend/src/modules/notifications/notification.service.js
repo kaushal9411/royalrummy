@@ -1,7 +1,7 @@
 const admin  = require('firebase-admin');
 const { query } = require('../../config/database');
 const logger = require('../../config/logger');
-const { sendOtpViaFcm } = require('../../config/firebase');
+const { sendOtpViaFcm, ensureFirebase } = require('../../config/firebase');
 
 // Create required tables on startup
 query(`
@@ -27,6 +27,17 @@ query(`
     data       JSONB,
     status     VARCHAR(20)  DEFAULT 'sent',
     error_msg  TEXT,
+    created_at TIMESTAMPTZ  DEFAULT NOW()
+  )
+`).catch(() => {});
+
+query(`
+  CREATE TABLE IF NOT EXISTS broadcast_logs (
+    id         SERIAL PRIMARY KEY,
+    type       VARCHAR(50)  DEFAULT 'GENERAL',
+    title      VARCHAR(255) NOT NULL,
+    body       TEXT         NOT NULL,
+    sent_to    INTEGER      DEFAULT 0,
     created_at TIMESTAMPTZ  DEFAULT NOW()
   )
 `).catch(() => {});
@@ -115,7 +126,7 @@ const sendNotificationToMultiple = async (userIds, title, body, data = {}) => {
 
 // ── Notify ALL users about a new open bet room ────────────────────────────────
 const sendOpenRoomNotification = async (roomCode, betAmount, hostName = 'A player') => {
-  if (!admin.apps.length) return;
+  if (!ensureFirebase()) return;
 
   const result = await query(
     `SELECT DISTINCT ON (user_id) fcm_token
@@ -173,10 +184,81 @@ const sendOpenRoomNotification = async (roomCode, betAmount, hostName = 'A playe
   logger.info(`[FCM] Room notification sent: ${sent} ok, ${failed} failed — room ${roomCode}`);
 };
 
+// ── Admin broadcast to ALL active devices ─────────────────────────────────────
+const sendAdminBroadcast = async (title, body, type = 'GENERAL', data = {}) => {
+  if (!ensureFirebase()) throw { status: 503, message: 'Firebase not configured — check FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY in .env' };
+
+  const result = await query(
+    `SELECT DISTINCT ON (user_id) fcm_token
+     FROM device_tokens
+     WHERE is_active = TRUE
+     ORDER BY user_id, last_used DESC`
+  );
+
+  const allTokens = result.rows.map((r) => r.fcm_token);
+  if (!allTokens.length) {
+    await query(
+      `INSERT INTO broadcast_logs (type, title, body, sent_to) VALUES ($1, $2, $3, 0)`,
+      [type, title, body]
+    ).catch(() => {});
+    return { sent: 0 };
+  }
+
+  const message = {
+    data: {
+      ...Object.fromEntries(Object.entries(data).map(([k, v]) => [k, String(v)])),
+      type,
+      title,
+      body,
+      timestamp: new Date().toISOString(),
+    },
+    notification: { title, body },
+    android: {
+      priority: 'high',
+      notification: { title, body, channelId: 'default_channel', icon: '@mipmap/ic_launcher' },
+    },
+    apns: { payload: { aps: { alert: { title, body }, sound: 'default' } } },
+  };
+
+  const BATCH = 500;
+  let sent = 0;
+  for (let i = 0; i < allTokens.length; i += BATCH) {
+    const tokens = allTokens.slice(i, i + BATCH);
+    try {
+      const res = await admin.messaging().sendEachForMulticast({ ...message, tokens });
+      sent += res.successCount;
+    } catch (err) {
+      logger.error('[FCM] Admin broadcast batch failed:', err.message);
+    }
+  }
+
+  await query(
+    `INSERT INTO broadcast_logs (type, title, body, sent_to) VALUES ($1, $2, $3, $4)`,
+    [type, title, body, sent]
+  ).catch(() => {});
+
+  logger.info(`[FCM] Admin broadcast: ${sent}/${allTokens.length} devices`);
+  return { sent };
+};
+
+// ── Get broadcast history ─────────────────────────────────────────────────────
+const getBroadcastHistory = async (limit = 50) => {
+  const result = await query(
+    `SELECT id, type, title, body, sent_to, created_at
+     FROM broadcast_logs
+     ORDER BY created_at DESC
+     LIMIT $1`,
+    [limit]
+  );
+  return result.rows;
+};
+
 module.exports = {
   storeDeviceToken,
   sendOtpNotification,
   sendNotification,
   sendNotificationToMultiple,
   sendOpenRoomNotification,
+  sendAdminBroadcast,
+  getBroadcastHistory,
 };

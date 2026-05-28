@@ -83,6 +83,99 @@ export interface Analytics {
   topPlayers:         { username: string; matches_won: number; total_score: number }[];
 }
 
+// ─── Extended dashboard ───────────────────────────────────────────────────────
+
+export interface DashboardStats {
+  totalUsers:     number;
+  activeGames:    number;
+  todayMatches:   number;
+  totalMatches:   number;
+  todayRevenue:   number;
+  totalRevenue:   number;
+  pendingWithdrawals: number;
+  onlineUsers:    number;
+}
+
+export const getDashboardStats = async (): Promise<DashboardStats> => {
+  const res = await api.get('/admin/dashboard');
+  return res.data;
+};
+
+// ─── Room types & calls ───────────────────────────────────────────────────────
+
+export interface AdminRoom {
+  id:           string;
+  code:         string;
+  status:       string;
+  is_private:   boolean;
+  bet_amount:   number;
+  host_id:      string;
+  host_name:    string;
+  player_count: number;
+  created_at:   string;
+  started_at:   string | null;
+  finished_at:  string | null;
+}
+
+export const getAdminRooms = async (params?: {
+  status?: string; limit?: number; offset?: number;
+}): Promise<{ rooms: AdminRoom[]; total: number }> => {
+  const res = await api.get('/admin/rooms', { params });
+  return res.data;
+};
+
+export const closeAdminRoom = async (roomId: string): Promise<void> => {
+  await api.patch(`/admin/rooms/${roomId}/close`);
+};
+
+// ─── Notification types & calls ───────────────────────────────────────────────
+
+export interface NotificationLog {
+  id:         string;
+  type:       string;
+  title:      string;
+  body:       string;
+  sent_to:    number;
+  created_at: string;
+}
+
+export const sendBroadcastNotification = async (payload: {
+  title: string;
+  body:  string;
+  type?: string;
+  data?: Record<string, string>;
+}): Promise<{ sent: number }> => {
+  const res = await api.post('/admin/notifications/broadcast', payload);
+  return res.data;
+};
+
+export const getNotificationHistory = async (): Promise<NotificationLog[]> => {
+  const res = await api.get('/admin/notifications/history');
+  return res.data;
+};
+
+// ─── Settings types & calls ───────────────────────────────────────────────────
+
+export interface AdminSettings {
+  maintenance_mode:     boolean;
+  registration_enabled: boolean;
+  min_withdrawal:       number;
+  max_withdrawal:       number;
+  welcome_bonus:        number;
+  max_bet_amount:       number;
+  platform_fee_pct:     number;
+}
+
+export const getAdminSettings = async (): Promise<AdminSettings> => {
+  const res = await api.get('/admin/settings');
+  return res.data;
+};
+
+export const updateAdminSettings = async (data: Partial<AdminSettings>): Promise<AdminSettings> => {
+  const res = await api.patch('/admin/settings', data);
+  return res.data;
+};
+
 // ─── Payment types & calls ────────────────────────────────────────────────────
 
 export interface PaymentStats {

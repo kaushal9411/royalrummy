@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
+import '../../../../core/services/app_settings_service.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../auth/presentation/bloc/auth_bloc.dart';
 import '../../../game/presentation/bloc/game_bloc.dart';
@@ -1009,6 +1010,11 @@ class _BetPickerSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final maxBet = AppSettingsService.instance.current.maxBetAmount;
+    final visibleBets = _bets
+        .where((b) => (b['amount'] as double) == 0 || (b['amount'] as double) <= maxBet)
+        .toList();
+
     return Container(
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
       decoration: const BoxDecoration(
@@ -1046,21 +1052,24 @@ class _BetPickerSheet extends StatelessWidget {
                   color: Colors.white, size: 20),
             ),
             const SizedBox(width: 14),
-            const Column(
+            Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Set Bet Amount',
+                  const Text('Set Bet Amount',
                       style: TextStyle(
                           color: AppColors.textPrimary,
                           fontWeight: FontWeight.w800,
                           fontSize: 18)),
-                  Text('Requires wallet balance > ₹100',
-                      style: TextStyle(
+                  Text(
+                      maxBet > 0
+                          ? 'Max bet: ₹${maxBet.toStringAsFixed(0)}'
+                          : 'No real-money bets available',
+                      style: const TextStyle(
                           color: AppColors.textSecondary, fontSize: 12)),
                 ]),
           ]),
           const SizedBox(height: 20),
-          ..._bets.map((b) => Padding(
+          ...visibleBets.map((b) => Padding(
                 padding: const EdgeInsets.only(bottom: 10),
                 child: _BetOption(
                   label: b['label'] as String,

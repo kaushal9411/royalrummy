@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:lakadiya/core/services/api_service.dart';
+import '../../../../../core/services/app_settings_service.dart';
 import '../../../../../core/theme/app_theme.dart';
 import '../bloc/payment_bloc.dart';
 import '../../data/models/payment_model.dart';
@@ -75,6 +76,15 @@ class _WithdrawScreenState extends State<WithdrawScreen>
     final amount = double.tryParse(_amountCtl.text);
     if (amount == null || amount <= 0) {
       _snack('Enter a valid amount', AppColors.danger);
+      return;
+    }
+    final settings = AppSettingsService.instance.current;
+    if (amount < settings.minWithdrawal) {
+      _snack('Minimum withdrawal is ₹${settings.minWithdrawal.toStringAsFixed(0)}', AppColors.danger);
+      return;
+    }
+    if (amount > settings.maxWithdrawal) {
+      _snack('Maximum withdrawal is ₹${settings.maxWithdrawal.toStringAsFixed(0)}', AppColors.danger);
       return;
     }
     if (_balance != null && amount > _balance!.currentBalance) {
@@ -295,33 +305,38 @@ class _WithdrawScreenState extends State<WithdrawScreen>
     ),
   );
 
-  Widget _buildInfoBanner() => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-    decoration: BoxDecoration(
-      borderRadius: BorderRadius.circular(14),
-      gradient: LinearGradient(
-        colors: [AppColors.accent.withValues(alpha: 0.08), AppColors.accent.withValues(alpha: 0.03)],
-      ),
-      border: Border.all(color: AppColors.accent.withValues(alpha: 0.2)),
-    ),
-    child: Row(children: [
-      Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: AppColors.accent.withValues(alpha: 0.15),
-          borderRadius: BorderRadius.circular(10),
+  Widget _buildInfoBanner() {
+    final settings = AppSettingsService.instance.current;
+    final min = settings.minWithdrawal.toStringAsFixed(0);
+    final max = settings.maxWithdrawal.toStringAsFixed(0);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        gradient: LinearGradient(
+          colors: [AppColors.accent.withValues(alpha: 0.08), AppColors.accent.withValues(alpha: 0.03)],
         ),
-        child: const Icon(Icons.schedule_rounded, color: AppColors.accent, size: 16),
+        border: Border.all(color: AppColors.accent.withValues(alpha: 0.2)),
       ),
-      const SizedBox(width: 12),
-      const Expanded(
-        child: Text(
-          'Requests are reviewed within 24–48 hours and transferred to your registered bank account.',
-          style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+      child: Row(children: [
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: AppColors.accent.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: const Icon(Icons.schedule_rounded, color: AppColors.accent, size: 16),
         ),
-      ),
-    ]),
-  );
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            'Min ₹$min · Max ₹$max per request.\nReviewed within 24–48 hours.',
+            style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+          ),
+        ),
+      ]),
+    );
+  }
 
   Widget _buildWithdrawButton(bool loading) {
     final amt = double.tryParse(_amountCtl.text) ?? 0;

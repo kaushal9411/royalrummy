@@ -1,6 +1,7 @@
 const { query, getClient } = require('../../config/database');
 const { v4: uuidv4 } = require('uuid');
 const { sendOpenRoomNotification } = require('../notifications/notification.service');
+const { getSettings } = require('../admin/settings.service');
 
 const VALID_BET_AMOUNTS = [0, 10, 25, 50, 100];
 
@@ -22,8 +23,12 @@ const generateCode = () =>
 const createRoom = async (hostId, isPrivate = false, betAmount = 0) => {
   const safeBet = VALID_BET_AMOUNTS.includes(Number(betAmount)) ? Number(betAmount) : 0;
 
-  // If paid room, validate host has enough balance to cover the bet
   if (safeBet > 0) {
+    const settings = await getSettings();
+    const maxBet = parseFloat(settings.max_bet_amount) || 100;
+    if (safeBet > maxBet)
+      throw { status: 400, message: `Maximum bet amount is ₹${maxBet}` };
+
     const balance = await _getUserBalance(hostId);
     if (balance < safeBet) throw { status: 400, message: `Insufficient balance. You need ₹${safeBet} to create this bet room` };
   }

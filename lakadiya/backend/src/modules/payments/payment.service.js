@@ -2,6 +2,7 @@ const Razorpay = require('razorpay');
 const crypto = require('crypto');
 const { query, getClient } = require('../../config/database');
 const logger = require('../../config/logger');
+const { getSettings } = require('../admin/settings.service');
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
@@ -245,6 +246,14 @@ const getWithdrawalRequests = async (userId, limit = 20, offset = 0) => {
 const requestWithdrawal = async (userId, amount) => {
   try {
     if (amount <= 0) throw { status: 400, message: 'Invalid withdrawal amount' };
+
+    const settings = await getSettings();
+    const minW = parseFloat(settings.min_withdrawal) || 100;
+    const maxW = parseFloat(settings.max_withdrawal) || 10000;
+    if (amount < minW)
+      throw { status: 400, message: `Minimum withdrawal amount is ₹${minW}` };
+    if (amount > maxW)
+      throw { status: 400, message: `Maximum withdrawal amount is ₹${maxW}` };
 
     console.log(`[Payment] Requesting withdrawal - User: ${userId}, Amount: ${amount}`);
 

@@ -11,6 +11,7 @@ const leaderboardRoutes = require('./modules/leaderboard/leaderboard.routes');
 const paymentRoutes = require('./modules/payments/payment.routes');
 const notificationRoutes = require('./modules/notifications/notification.routes');
 const adminRoutes = require('./modules/admin/admin.routes');
+const { getSettings } = require('./modules/admin/settings.service');
 const { errorHandler, notFound } = require('./middleware/error.middleware');
 
 const app = express();
@@ -35,6 +36,22 @@ app.use('/api/leaderboard', leaderboardRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin', adminRoutes);
+
+// Public settings — no auth required, mobile app fetches on startup
+app.get('/api/settings/public', async (req, res, next) => {
+  try {
+    const s = await getSettings();
+    res.json({
+      maintenance_mode:     s.maintenance_mode,
+      registration_enabled: s.registration_enabled,
+      min_withdrawal:       Number(s.min_withdrawal),
+      max_withdrawal:       Number(s.max_withdrawal),
+      welcome_bonus:        Number(s.welcome_bonus),
+      max_bet_amount:       Number(s.max_bet_amount),
+      platform_fee_pct:     Number(s.platform_fee_pct),
+    });
+  } catch (e) { next(e); }
+});
 
 app.use(notFound);
 app.use(errorHandler);
