@@ -1,5 +1,6 @@
 const { query, getClient } = require('../../config/database');
 const { v4: uuidv4 } = require('uuid');
+const { sendOpenRoomNotification } = require('../notifications/notification.service');
 
 const VALID_BET_AMOUNTS = [0, 10, 25, 50, 100];
 
@@ -48,6 +49,14 @@ const createRoom = async (hostId, isPrivate = false, betAmount = 0) => {
     'INSERT INTO room_players (room_id, user_id, seat) VALUES ($1, $2, $3)',
     [room.id, hostId, 0]
   );
+
+  // Notify all users about the new open bet room (fire-and-forget)
+  if (!isPrivate && safeBet > 0) {
+    const hostResult = await query('SELECT username FROM users WHERE id = $1', [hostId]);
+    const hostName = hostResult.rows[0]?.username || 'A player';
+    sendOpenRoomNotification(room.code, safeBet, hostName).catch(() => {});
+  }
+
   return room;
 };
 

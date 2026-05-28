@@ -20,9 +20,16 @@ class _LoginPageState extends State<LoginPage>
     with TickerProviderStateMixin, CodeAutoFill {
   int _step = 1; // 1 = mobile, 2 = OTP
   String _mobile = '';
+  bool _isVerifying = false;
 
   final _mobileCtl = TextEditingController();
   final _otpCtl    = TextEditingController();
+
+  // 6 individual digit controllers + focus nodes for the custom OTP input
+  final List<TextEditingController> _digitCtls =
+      List.generate(6, (_) => TextEditingController());
+  final List<FocusNode> _digitFocusNodes =
+      List.generate(6, (_) => FocusNode());
 
   late final AnimationController _floatCtrl;
   late final AnimationController _enterCtrl;
@@ -42,21 +49,27 @@ class _LoginPageState extends State<LoginPage>
     Future.delayed(const Duration(milliseconds: 200), () {
       if (mounted) _enterCtrl.forward();
     });
-    // Listen for OTP delivered via Firebase notification (fallback when Fast2SMS not set)
+
+    // Listen for OTP delivered via Firebase push notification
     _fcmOtpSub = FcmService.instance.otpStream.listen((otp) {
-      if (mounted && _step == 2) {
-        _otpCtl.text = otp;
-        Future.microtask(_verifyOtp);
-      }
+      if (mounted && _step == 2) _fillOtp(otp);
     });
+  }
+
+  // Fill all 6 digit boxes and auto-submit (used by FCM + SMS autofill)
+  void _fillOtp(String otp) {
+    if (!mounted || otp.length != 6) return;
+    for (int i = 0; i < 6; i++) {
+      _digitCtls[i].text = otp[i];
+    }
+    _otpCtl.text = otp;
+    if (!_isVerifying) Future.microtask(_verifyOtp);
   }
 
   @override
   void codeUpdated() {
-    // Called by sms_autofill when OTP is detected from SMS
-    if (code != null && code!.length == 6 && mounted) {
-      _otpCtl.text = code!;
-    }
+    // Called by sms_autofill when OTP is detected from an SMS
+    if (code != null && code!.length == 6 && mounted) _fillOtp(code!);
   }
 
   @override
@@ -67,6 +80,8 @@ class _LoginPageState extends State<LoginPage>
     _enterCtrl.dispose();
     _mobileCtl.dispose();
     _otpCtl.dispose();
+    for (final c in _digitCtls) { c.dispose(); }
+    for (final f in _digitFocusNodes) { f.dispose(); }
     super.dispose();
   }
 
@@ -77,13 +92,17 @@ class _LoginPageState extends State<LoginPage>
   }
 
   void _verifyOtp() {
+    if (_isVerifying) return;
     final otp = _otpCtl.text.trim();
     if (otp.length != 6) { _err('Enter the 6-digit OTP'); return; }
+    setState(() { _isVerifying = true; });
     context.read<AuthBloc>().add(AuthOtpVerifyRequested(_mobile, otp));
   }
 
   void _resendOtp() {
+    for (final c in _digitCtls) { c.clear(); }
     _otpCtl.clear();
+    _isVerifying = false;
     context.read<AuthBloc>().add(AuthOtpSendRequested(_mobile));
   }
 
@@ -173,9 +192,9 @@ class _LoginPageState extends State<LoginPage>
         listener: (ctx, state) {
           if (state is OtpSent) {
             setState(() { _step = 2; _mobile = state.mobile; });
-            // Start listening for OTP in incoming SMS
-            listenForCode();
+            listenForCode(); // start SMS autofill listener
           } else if (state is AuthError) {
+            setState(() { _isVerifying = false; });
             _err(state.message);
           }
         },
@@ -238,7 +257,6 @@ class _LoginPageState extends State<LoginPage>
             textAlign: TextAlign.center,
             style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
         const SizedBox(height: 28),
-        // Mobile input
         TextField(
           controller: _mobileCtl,
           keyboardType: TextInputType.phone,
@@ -294,7 +312,11 @@ class _LoginPageState extends State<LoginPage>
         Row(
           children: [
             GestureDetector(
-              onTap: () { cancel(); setState(() { _step = 1; _otpCtl.clear(); }); },
+              onTap: () {
+                cancel();
+                for (final c in _digitCtls) { c.clear(); }
+                setState(() { _step = 1; _otpCtl.clear(); _isVerifying = false; });
+              },
               child: Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
@@ -324,28 +346,12 @@ class _LoginPageState extends State<LoginPage>
           ),
         ),
         const SizedBox(height: 28),
-        // OTP PIN field with auto-fill
-        PinFieldAutoFill(
-          controller: _otpCtl,
-          codeLength: 6,
-          autoFocus: true,
-          decoration: UnderlineDecoration(
-            textStyle: const TextStyle(color: AppColors.textPrimary, fontSize: 22, fontWeight: FontWeight.bold),
-            colorBuilder: FixedColorBuilder(AppColors.primary),
-            bgColorBuilder: FixedColorBuilder(const Color(0xFF162230)),
-          ),
-          onCodeChanged: (v) {
-            if (v != null && v.length == 6) {
-              // Auto-submit when 6 digits entered
-              Future.microtask(_verifyOtp);
-            }
-          },
-          onCodeSubmitted: (_) => _verifyOtp(),
-        ),
+        // Custom 6-box OTP input — works correctly with programmatic fill from FCM
+        _buildOtpBoxes(),
         const SizedBox(height: 32),
         GradientButton(
-          onTap: loading ? null : _verifyOtp,
-          child: loading
+          onTap: (loading || _isVerifying) ? null : _verifyOtp,
+          child: (loading || _isVerifying)
               ? const SizedBox(height: 22, width: 22,
                   child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white))
               : const Text('Verify & Continue',
@@ -358,7 +364,7 @@ class _LoginPageState extends State<LoginPage>
             const Text("Didn't receive OTP? ",
                 style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
             GestureDetector(
-              onTap: loading ? null : _resendOtp,
+              onTap: (loading || _isVerifying) ? null : _resendOtp,
               child: const Text('Resend',
                   style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w600, fontSize: 13)),
             ),
@@ -367,6 +373,65 @@ class _LoginPageState extends State<LoginPage>
       ],
     ),
   );
+
+  Widget _buildOtpBoxes() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: List.generate(6, (i) => SizedBox(
+        width: 44,
+        child: TextField(
+          controller: _digitCtls[i],
+          focusNode: _digitFocusNodes[i],
+          maxLength: 1,
+          keyboardType: TextInputType.number,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          textAlign: TextAlign.center,
+          autofocus: i == 0,
+          style: const TextStyle(
+            color: AppColors.textPrimary,
+            fontSize: 22,
+            fontWeight: FontWeight.bold,
+          ),
+          decoration: InputDecoration(
+            counterText: '',
+            filled: true,
+            fillColor: const Color(0xFF162230),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(color: AppColors.darkBorder),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(color: AppColors.darkBorder),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: AppColors.primary, width: 2),
+            ),
+          ),
+          onChanged: (v) {
+            if (v.isEmpty) {
+              // Backspace: move focus to previous box
+              if (i > 0) _digitFocusNodes[i - 1].requestFocus();
+            } else {
+              // Digit entered: advance focus
+              if (i < 5) {
+                _digitFocusNodes[i + 1].requestFocus();
+              } else {
+                _digitFocusNodes[i].unfocus();
+              }
+            }
+            // Sync master controller and auto-submit when complete
+            final otp = _digitCtls.map((c) => c.text).join();
+            _otpCtl.text = otp;
+            if (otp.length == 6 && !_isVerifying) {
+              Future.microtask(_verifyOtp);
+            }
+          },
+        ),
+      )),
+    );
+  }
 
   Widget _buildBg() => Container(
     decoration: const BoxDecoration(

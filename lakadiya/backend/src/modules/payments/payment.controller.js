@@ -1,5 +1,6 @@
 const paymentService = require('./payment.service');
 const { getIO } = require('../../socket/socket.manager');
+const { sendNotification } = require('../notifications/notification.service');
 
 const emitBalanceUpdated = (userId) => {
   try { getIO().to(`user_${userId}`).emit('balance_updated'); } catch (_) {}
@@ -34,6 +35,13 @@ const verifyPayment = async (req, res, next) => {
     console.log(`[Payment Controller] Payment verified successfully`);
     emitBalanceUpdated(req.user.id);
     res.json(result);
+    sendNotification(
+      req.user.id,
+      '💰 Money Added Successfully!',
+      `₹${result.amount} has been added to your Lakadiya wallet. Happy playing!`,
+      { type: 'WALLET_ADD', amount: String(result.amount), coins: String(result.coins) },
+      'wallet_channel'
+    ).catch(() => {});
   } catch (err) {
     console.error(`[Payment Controller Error] Verify failed:`, err);
     next(err);
@@ -94,10 +102,14 @@ const requestWithdrawal = async (req, res, next) => {
 
     const withdrawal = await paymentService.requestWithdrawal(req.user.id, amount);
     console.log(`[Payment Controller] Withdrawal request submitted`);
-    res.json({
-      message: 'Withdrawal request submitted',
-      data: withdrawal,
-    });
+    res.json({ message: 'Withdrawal request submitted', data: withdrawal });
+    sendNotification(
+      req.user.id,
+      '📤 Withdrawal Request Submitted',
+      `Your request for ₹${amount} is under review. We'll process it within 24 hours.`,
+      { type: 'WITHDRAWAL_REQUESTED', amount: String(amount) },
+      'wallet_channel'
+    ).catch(() => {});
   } catch (err) {
     console.error(`[Payment Controller Error] Withdraw failed:`, err);
     next(err);
@@ -149,6 +161,13 @@ const approveWithdrawal = async (req, res, next) => {
     const result = await paymentService.approveWithdrawal(transactionId);
     emitBalanceUpdated(result.user_id);
     res.json({ message: 'Withdrawal approved', data: result });
+    sendNotification(
+      result.user_id,
+      '✅ Withdrawal Approved!',
+      `Your withdrawal of ₹${result.amount} has been approved. The amount will be transferred to your account shortly.`,
+      { type: 'WITHDRAWAL_APPROVED', amount: String(result.amount) },
+      'wallet_channel'
+    ).catch(() => {});
   } catch (err) {
     console.error(`[Payment Admin Error] Approve withdrawal failed:`, err);
     next(err);
@@ -164,6 +183,13 @@ const rejectWithdrawal = async (req, res, next) => {
     const result = await paymentService.rejectWithdrawal(transactionId, reason);
     emitBalanceUpdated(result.user_id);
     res.json({ message: 'Withdrawal rejected', data: result });
+    sendNotification(
+      result.user_id,
+      '❌ Withdrawal Request Rejected',
+      `Your withdrawal of ₹${result.amount} was not approved.${reason ? ` Reason: ${reason}.` : ''} Your coins have been refunded.`,
+      { type: 'WITHDRAWAL_REJECTED', amount: String(result.amount), reason: reason || '' },
+      'wallet_channel'
+    ).catch(() => {});
   } catch (err) {
     console.error(`[Payment Admin Error] Reject withdrawal failed:`, err);
     next(err);

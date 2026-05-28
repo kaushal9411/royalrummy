@@ -43,33 +43,54 @@ const requestOtp = async ({ mobile, fcmToken }) => {
 const verifyAndLogin = async ({ mobile, otp }) => {
   await verifyOtp(mobile, otp);
 
-  // Find existing real (non-guest) user by mobile
+  // Find any existing user by mobile (including guests who may have registered earlier)
   let userResult = await query(
     `SELECT id, username, email, mobile, coins, xp, level, provider, is_banned
-     FROM users WHERE mobile = $1 AND provider != 'guest'`,
+     FROM users WHERE mobile = $1`,
     [mobile]
   );
 
   let isNewUser = false;
 
-  if (!userResult.rows.length) {
-    // Auto-register: create account with random username
+  if (userResult.rows.length && userResult.rows[0].provider === 'guest') {
+    // Guest account with this mobile exists — upgrade it to a real account
+    userResult = await query(
+      `UPDATE users SET provider = 'local', last_seen = NOW()
+       WHERE mobile = $1
+       RETURNING id, username, email, mobile, coins, xp, level, provider, is_banned`,
+      [mobile]
+    );
+  } else if (!userResult.rows.length) {
+    // No account at all — auto-register
     let username = _randomUsername();
-    // Ensure uniqueness
     while ((await query('SELECT id FROM users WHERE username = $1', [username])).rows.length) {
       username = _randomUsername();
     }
 
-    userResult = await query(
-      `INSERT INTO users (username, mobile, provider, coins)
-       VALUES ($1, $2, 'local', 0)
-       RETURNING id, username, email, mobile, coins, xp, level, provider`,
-      [username, mobile]
-    );
-    await query(`INSERT INTO player_stats (user_id) VALUES ($1)`, [userResult.rows[0].id]);
-    await _creditWelcomeBonus(userResult.rows[0].id);
-    userResult.rows[0].coins = WELCOME_BONUS;
-    isNewUser = true;
+    try {
+      userResult = await query(
+        `INSERT INTO users (username, mobile, provider, coins)
+         VALUES ($1, $2, 'local', 0)
+         RETURNING id, username, email, mobile, coins, xp, level, provider`,
+        [username, mobile]
+      );
+      await query(`INSERT INTO player_stats (user_id) VALUES ($1)`, [userResult.rows[0].id]);
+      await _creditWelcomeBonus(userResult.rows[0].id);
+      userResult.rows[0].coins = WELCOME_BONUS;
+      isNewUser = true;
+    } catch (insertErr) {
+      // Race condition: a concurrent request just inserted this user
+      if (insertErr.code === '23505') {
+        userResult = await query(
+          `SELECT id, username, email, mobile, coins, xp, level, provider, is_banned
+           FROM users WHERE mobile = $1`,
+          [mobile]
+        );
+        if (!userResult.rows.length) throw insertErr;
+      } else {
+        throw insertErr;
+      }
+    }
   }
 
   const user = userResult.rows[0];

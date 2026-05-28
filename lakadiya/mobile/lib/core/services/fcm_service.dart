@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-/// Handles FCM token retrieval and listens for OTP + other messages
 class FcmService {
   FcmService._();
   static final FcmService instance = FcmService._();
@@ -14,14 +13,12 @@ class FcmService {
   final _otpController = StreamController<String>.broadcast();
   Stream<String> get otpStream => _otpController.stream;
 
-  // Local notifications plugin for showing rich notifications
   late final FlutterLocalNotificationsPlugin _localNotifications;
 
   Future<void> init() async {
     try {
       final messaging = FirebaseMessaging.instance;
 
-      // Request permission with all features
       await messaging.requestPermission(
         alert: true,
         badge: true,
@@ -34,19 +31,14 @@ class FcmService {
       print('FCM DEVICE TOKEN: $_token');
       print('==================================================');
 
-      // Refresh token when it changes
       messaging.onTokenRefresh.listen((t) {
         _token = t;
         print('FCM Token refreshed: $t');
       });
 
-      // Initialize local notifications for rich display
-      _initLocalNotifications();
+      await _initLocalNotifications();
 
-      // ── Foreground messages ──────────────────────────────────────────────
       FirebaseMessaging.onMessage.listen(_handleMessage);
-
-      // ── Background / terminated — handled in main via onBackgroundMessage ─
     } catch (e) {
       print('FCM initialization error: $e');
     }
@@ -55,82 +47,111 @@ class FcmService {
   Future<void> _initLocalNotifications() async {
     _localNotifications = FlutterLocalNotificationsPlugin();
 
-    // Android channel for OTP notifications
-    const androidChannel = AndroidNotificationChannel(
+    const otpChannel = AndroidNotificationChannel(
       'otp_channel',
       'OTP Notifications',
-      description: 'Notifications for OTP delivery',
+      description: 'One-time password delivery',
       importance: Importance.max,
       enableVibration: true,
       playSound: true,
     );
 
-    // Create the channel
-    await _localNotifications
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
-        ?.createNotificationChannel(androidChannel);
+    const roomChannel = AndroidNotificationChannel(
+      'room_channel',
+      'Game Room Alerts',
+      description: 'Alerts for new open bet rooms',
+      importance: Importance.high,
+      enableVibration: true,
+      playSound: true,
+    );
 
-    // Initialize with default settings
+    const walletChannel = AndroidNotificationChannel(
+      'wallet_channel',
+      'Wallet & Payments',
+      description: 'Wallet top-up, withdrawal and payment updates',
+      importance: Importance.high,
+      enableVibration: true,
+      playSound: true,
+    );
+
+    final androidPlugin = _localNotifications
+        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+    await androidPlugin?.createNotificationChannel(otpChannel);
+    await androidPlugin?.createNotificationChannel(roomChannel);
+    await androidPlugin?.createNotificationChannel(walletChannel);
+
     const initSettings = InitializationSettings(
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
       iOS: DarwinInitializationSettings(),
     );
-
     await _localNotifications.initialize(initSettings);
   }
 
   void _handleMessage(RemoteMessage message) {
-    print('Foreground FCM message: ${message.notification?.title}');
-    print('Message data: ${message.data}');
-
+    print('Foreground FCM message: ${message.data}');
     final data = message.data;
-    final notification = message.notification;
 
-    // Handle OTP type
     if (data['type'] == 'OTP' || data.containsKey('otp')) {
       final otp = data['otp'] as String?;
       if (otp != null && otp.length == 6) {
         _otpController.add(otp);
-        _showOtpNotification(otp);
+        _showOtpNotification(otp: otp, bigText: data['bigText']);
       }
-    } else if (notification != null) {
-      // Show other notifications
-      _showNotification(
-        title: notification.title ?? 'Notification',
-        body: notification.body ?? '',
-        data: data,
+    } else if (data['type'] == 'NEW_ROOM') {
+      _showRoomNotification(
+        roomCode:  data['roomCode']  ?? '',
+        betAmount: data['betAmount'] ?? '0',
+        hostName:  data['hostName'],
+        bigText:   data['bigText'],
       );
+    } else if (const {'WALLET_ADD', 'WITHDRAWAL_REQUESTED', 'WITHDRAWAL_APPROVED', 'WITHDRAWAL_REJECTED'}
+        .contains(data['type'])) {
+      _showWalletNotification(
+        title: data['title'] ?? message.notification?.title ?? '',
+        body:  data['body']  ?? message.notification?.body  ?? '',
+        type:  data['type']  as String,
+      );
+    } else if (message.notification != null) {
+      final n = message.notification!;
+      _showGenericNotification(title: n.title ?? '', body: n.body ?? '', data: data);
     }
   }
 
-  /// Display OTP notification with app icon and vibration
-  Future<void> _showOtpNotification(String otp) async {
+  Future<void> _showOtpNotification({
+    required String otp,
+    String? bigText,
+  }) async {
     try {
-      final bigText = 'Your verification code is:\n$otp\n\nDo not share this code with anyone.';
-      
+      final style = BigTextStyleInformation(
+        bigText ?? 'Your one-time password:\n\n       $otp\n\nValid for 10 minutes. Do not share this code with anyone.',
+        contentTitle: '<b>🔐 Lakadiya – Verification Code</b>',
+        summaryText:  'Tap to open the app and auto-fill',
+      );
+
       await _localNotifications.show(
-        1, // notification ID
-        'Your OTP Code',
-        'OTP: $otp',
+        1,
+        '🔐 Lakadiya – Verification Code',
+        'OTP: $otp  •  Tap to auto-fill',
         NotificationDetails(
           android: AndroidNotificationDetails(
             'otp_channel',
             'OTP Notifications',
-            channelDescription: 'Notifications for OTP delivery',
-            icon: '@mipmap/ic_launcher',
-            importance: Importance.max,
-            priority: Priority.high,
-            enableVibration: true,
-            playSound: true,
-            color: Colors.green,
-            ticker: 'OTP Delivery',
+            channelDescription: 'One-time password delivery',
+            icon:               '@mipmap/ic_launcher',
+            importance:         Importance.max,
+            priority:           Priority.high,
+            enableVibration:    true,
+            playSound:          true,
+            color:              const Color(0xFF00C853),
+            ticker:             'OTP Received',
+            styleInformation:   style,
           ),
           iOS: const DarwinNotificationDetails(
-            sound: 'default',
-            presentAlert: true,
-            presentBadge: true,
-            presentSound: true,
+            sound:         'default',
+            presentAlert:  true,
+            presentBadge:  true,
+            presentSound:  true,
+            subtitle:      'Tap to auto-fill',
           ),
         ),
         payload: 'otp:$otp',
@@ -140,35 +161,133 @@ class FcmService {
     }
   }
 
-  /// Display generic notification
-  Future<void> _showNotification({
+  Future<void> _showRoomNotification({
+    required String roomCode,
+    required String betAmount,
+    String? hostName,
+    String? bigText,
+  }) async {
+    try {
+      final bet  = double.tryParse(betAmount) ?? 0;
+      final betText = '₹${bet.toStringAsFixed(0)}';
+      final host = hostName ?? 'A player';
+
+      final style = BigTextStyleInformation(
+        bigText ?? '$host just opened a $betText bet room!\n\n'
+            '  🎯  Room Code:  $roomCode\n'
+            '  💰  Bet Amount: $betText\n\n'
+            'Join before it fills up!',
+        contentTitle: '<b>🎮 New Bet Room Available!</b>',
+        summaryText:  '$betText Bet • Tap to join',
+      );
+
+      await _localNotifications.show(
+        DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        '🎮 New Bet Room – Join Now!',
+        'Code: $roomCode  •  $betText Bet',
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            'room_channel',
+            'Game Room Alerts',
+            channelDescription: 'Alerts for new open bet rooms',
+            icon:               '@mipmap/ic_launcher',
+            importance:         Importance.high,
+            priority:           Priority.high,
+            enableVibration:    true,
+            playSound:          true,
+            color:              const Color(0xFFFF6F00),
+            ticker:             'New Bet Room',
+            styleInformation:   style,
+          ),
+          iOS: const DarwinNotificationDetails(
+            sound:        'default',
+            presentAlert: true,
+            presentBadge: true,
+            presentSound: true,
+            subtitle:     'Tap to join the room',
+          ),
+        ),
+        payload: 'room:$roomCode',
+      );
+    } catch (e) {
+      print('Error showing room notification: $e');
+    }
+  }
+
+  Future<void> _showWalletNotification({
+    required String title,
+    required String body,
+    required String type,
+  }) async {
+    try {
+      Color color;
+      if (type == 'WALLET_ADD') {
+        color = const Color(0xFF00C853);
+      } else if (type == 'WITHDRAWAL_APPROVED') {
+        color = const Color(0xFF4CAF50);
+      } else if (type == 'WITHDRAWAL_REJECTED') {
+        color = const Color(0xFFE53935);
+      } else {
+        color = const Color(0xFF2196F3); // WITHDRAWAL_REQUESTED
+      }
+
+      await _localNotifications.show(
+        DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        title,
+        body,
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            'wallet_channel',
+            'Wallet & Payments',
+            channelDescription: 'Wallet top-up, withdrawal and payment updates',
+            icon:            '@mipmap/ic_launcher',
+            importance:      Importance.high,
+            priority:        Priority.high,
+            enableVibration: true,
+            playSound:       true,
+            color:           color,
+            ticker:          title,
+          ),
+          iOS: const DarwinNotificationDetails(
+            sound:        'default',
+            presentAlert: true,
+            presentBadge: true,
+            presentSound: true,
+          ),
+        ),
+      );
+    } catch (e) {
+      print('Error showing wallet notification: $e');
+    }
+  }
+
+  Future<void> _showGenericNotification({
     required String title,
     required String body,
     Map<String, dynamic>? data,
   }) async {
     try {
       await _localNotifications.show(
-        DateTime.now().millisecond,
+        DateTime.now().millisecondsSinceEpoch ~/ 1000,
         title,
         body,
-        NotificationDetails(
+        const NotificationDetails(
           android: AndroidNotificationDetails(
             'default_channel',
             'General Notifications',
-            icon: '@mipmap/ic_launcher',
-            importance: Importance.high,
-            priority: Priority.high,
+            icon:            '@mipmap/ic_launcher',
+            importance:      Importance.high,
+            priority:        Priority.high,
             enableVibration: true,
-            playSound: true,
+            playSound:       true,
           ),
-          iOS: const DarwinNotificationDetails(
-            sound: 'default',
+          iOS: DarwinNotificationDetails(
+            sound:        'default',
             presentAlert: true,
             presentBadge: true,
             presentSound: true,
           ),
         ),
-        payload: data != null ? Uri.encodeComponent(Uri(queryParameters: data).toString()) : null,
       );
     } catch (e) {
       print('Error showing notification: $e');
@@ -180,10 +299,7 @@ class FcmService {
   }
 }
 
-/// Top-level handler for background/terminated FCM messages.
-/// Must be a top-level function (not inside a class).
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  print('Background FCM message received: ${message.notification?.title}');
-  print('Message data: ${message.data}');
+  print('Background FCM message: ${message.data}');
 }

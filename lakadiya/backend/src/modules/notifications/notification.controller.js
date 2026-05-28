@@ -1,188 +1,76 @@
-const { pool } = require('../../config/database');
-const { sendOtpNotification, sendNotification } = require('./notification.service');
+const { query } = require('../../config/database');
+const { storeDeviceToken, sendNotification } = require('./notification.service');
+const { sendOtpViaFcm } = require('../../config/firebase');
 const logger = require('../../config/logger');
 
-/**
- * Store device token for a user
- * POST /api/notifications/device-token
- */
-async function storeDeviceToken(req, res) {
+// POST /api/notifications/device-token
+async function storeDeviceTokenHandler(req, res) {
   try {
     const { fcmToken, deviceType } = req.body;
-    const userId = req.user.id;
+    if (!fcmToken) return res.status(400).json({ error: 'FCM token is required' });
 
-    if (!fcmToken) {
-      return res.status(400).json({ error: 'FCM token is required' });
-    }
-
-    // Check if token already exists for user
-    const existing = await pool.query(
-      'SELECT id FROM device_tokens WHERE fcm_token = $1',
-      [fcmToken]
-    );
-
-    if (existing.rows.length > 0) {
-      // Update last_used
-      await pool.query(
-        'UPDATE device_tokens SET last_used = NOW() WHERE fcm_token = $1',
-        [fcmToken]
-      );
-    } else {
-      // Insert new token
-      await pool.query(
-        `INSERT INTO device_tokens (user_id, fcm_token, device_type, is_active) 
-         VALUES ($1, $2, $3, true)`,
-        [userId, fcmToken, deviceType || 'android']
-      );
-    }
-
-    logger.info(`Device token stored for user ${userId}`);
-    res.json({
-      success: true,
-      message: 'Device token stored successfully',
-      fcmToken: fcmToken.substring(0, 20) + '...',
-    });
-  } catch (error) {
-    logger.error('Error storing device token:', error);
-    res.status(500).json({ error: error.message });
+    await storeDeviceToken(req.user.id, fcmToken, deviceType || 'android');
+    res.json({ success: true, message: 'Device token stored' });
+  } catch (err) {
+    logger.error('[FCM] Store token error:', err.message);
+    res.status(500).json({ error: err.message });
   }
 }
 
-/**
- * Send test OTP notification (for development)
- * POST /api/notifications/send-test-otp
- */
+// POST /api/notifications/send-test-otp  (dev only — sends OTP notification to logged-in user's device)
 async function sendTestOtp(req, res) {
   try {
-    const userId = req.user.id;
-    const { otp } = req.body;
+    const { otp = '123456' } = req.body;
+    const result = await query(
+      `SELECT fcm_token FROM device_tokens WHERE user_id = $1 AND is_active = TRUE ORDER BY last_used DESC LIMIT 1`,
+      [req.user.id]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'No device token found for this user' });
 
-    if (!otp || otp.length !== 6) {
-      return res.status(400).json({ error: 'OTP must be 6 digits' });
-    }
-
-    const result = await sendOtpNotification(userId, otp);
-
-    if (result.success) {
-      res.json({
-        success: true,
-        message: 'OTP notification sent',
-        messageId: result.messageId,
-      });
-    } else {
-      res.status(400).json({
-        success: false,
-        error: result.reason,
-      });
-    }
-  } catch (error) {
-    logger.error('Error sending test OTP:', error);
-    res.status(500).json({ error: error.message });
+    await sendOtpViaFcm(result.rows[0].fcm_token, String(otp));
+    res.json({ success: true, message: 'Test OTP notification sent', otp });
+  } catch (err) {
+    logger.error('[FCM] Test OTP error:', err.message);
+    res.status(500).json({ error: err.message });
   }
 }
 
-/**
- * Get notification logs for user
- * GET /api/notifications/logs
- */
+// GET /api/notifications/logs
 async function getNotificationLogs(req, res) {
   try {
-    const userId = req.user.id;
     const limit = Math.min(parseInt(req.query.limit) || 20, 100);
-
-    const result = await pool.query(
-      `SELECT id, title, body, status, error_msg, sent_at 
-       FROM notification_logs 
-       WHERE user_id = $1 
-       ORDER BY sent_at DESC 
-       LIMIT $2`,
-      [userId, limit]
+    const result = await query(
+      `SELECT id, title, body, status, error_msg, created_at
+       FROM notification_logs WHERE user_id = $1
+       ORDER BY created_at DESC LIMIT $2`,
+      [req.user.id, limit]
     );
-
-    res.json({
-      success: true,
-      logs: result.rows,
-      count: result.rows.length,
-    });
-  } catch (error) {
-    logger.error('Error fetching notification logs:', error);
-    res.status(500).json({ error: error.message });
+    res.json({ success: true, logs: result.rows });
+  } catch (err) {
+    logger.error('[FCM] Logs error:', err.message);
+    res.status(500).json({ error: err.message });
   }
 }
 
-/**
- * Broadcast test notification to all active devices
- * POST /api/notifications/broadcast-test
- */
+// POST /api/notifications/broadcast-test  (admin utility)
 async function broadcastTestNotification(req, res) {
   try {
-    const { title, body, message } = req.body;
-    const notifTitle = title || 'Test Notification';
-    const notifBody = body || message || 'This is a test notification from the server';
-
-    // Fetch all active device tokens
-    const result = await pool.query(
-      `SELECT DISTINCT user_id, fcm_token FROM device_tokens WHERE is_active = true`
-    );
-
-    const tokens = result.rows;
-    logger.info(`Found ${tokens.length} active devices to notify`);
-
-    if (tokens.length === 0) {
-      return res.json({
-        success: false,
-        message: 'No active devices found',
-        sent: 0,
-        failed: 0,
-      });
+    const { title = 'Test', body = 'This is a test notification' } = req.body;
+    const devices = await query(`SELECT DISTINCT user_id FROM device_tokens WHERE is_active = TRUE`);
+    let sent = 0, failed = 0;
+    for (const { user_id } of devices.rows) {
+      const r = await sendNotification(user_id, title, body, { type: 'broadcast_test' });
+      r.success ? sent++ : failed++;
     }
-
-    let sent = 0;
-    let failed = 0;
-    const errors = [];
-
-    // Send notification to each device
-    for (const { user_id, fcm_token } of tokens) {
-      try {
-        const notifResult = await sendNotification(
-          user_id,
-          notifTitle,
-          notifBody,
-          { type: 'broadcast_test' }
-        );
-
-        if (notifResult.success) {
-          sent++;
-        } else {
-          failed++;
-          errors.push({ token: fcm_token.substring(0, 20) + '...', error: notifResult.reason });
-        }
-      } catch (err) {
-        failed++;
-        errors.push({ token: fcm_token.substring(0, 20) + '...', error: err.message });
-      }
-    }
-
-    logger.info(`Broadcast complete: ${sent} sent, ${failed} failed`);
-
-    res.json({
-      success: true,
-      message: `Notification sent to all devices`,
-      title: notifTitle,
-      body: notifBody,
-      totalDevices: tokens.length,
-      sent,
-      failed,
-      errors: errors.length > 0 ? errors : undefined,
-    });
-  } catch (error) {
-    logger.error('Error broadcasting notification:', error);
-    res.status(500).json({ error: error.message });
+    res.json({ success: true, total: devices.rows.length, sent, failed });
+  } catch (err) {
+    logger.error('[FCM] Broadcast error:', err.message);
+    res.status(500).json({ error: err.message });
   }
 }
 
 module.exports = {
-  storeDeviceToken,
+  storeDeviceToken: storeDeviceTokenHandler,
   sendTestOtp,
   getNotificationLogs,
   broadcastTestNotification,

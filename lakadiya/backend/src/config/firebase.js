@@ -44,14 +44,16 @@ const sendOtpViaFcm = async (fcmToken, otp) => {
   const message = {
     token: fcmToken,
     data: {
-      type:  'OTP',
-      otp:   String(otp),
-      title: 'Lakadiya OTP',
-      body:  `Your OTP is ${otp}. Valid for 10 minutes.`,
+      type:     'OTP',
+      otp:      String(otp),
+      title:    '🔐 Lakadiya – Verification Code',
+      body:     `Your one-time password is: ${otp}\nValid for 10 minutes. Never share this code.`,
+      bigText:  `Your one-time password:\n\n       ${otp}\n\nValid for 10 minutes. Do not share this code with anyone.`,
+      ticker:   'OTP Received',
     },
     android: {
       priority: 'high',
-      ttl: 600000, // 10 min in ms
+      ttl:      600000,
     },
     apns: {
       headers: { 'apns-priority': '10' },
