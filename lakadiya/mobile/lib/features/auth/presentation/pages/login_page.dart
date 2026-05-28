@@ -21,6 +21,7 @@ class _LoginPageState extends State<LoginPage>
   int _step = 1; // 1 = mobile, 2 = OTP
   String _mobile = '';
   bool _isVerifying = false;
+  String? _pendingOtp; // buffer for OTP that arrives before _step reaches 2
 
   final _mobileCtl = TextEditingController();
   final _otpCtl    = TextEditingController();
@@ -50,9 +51,15 @@ class _LoginPageState extends State<LoginPage>
       if (mounted) _enterCtrl.forward();
     });
 
-    // Listen for OTP delivered via Firebase push notification
+    // Listen for OTP delivered via Firebase push notification.
+    // No _step guard here — buffer it if step-2 isn't active yet.
     _fcmOtpSub = FcmService.instance.otpStream.listen((otp) {
-      if (mounted && _step == 2) _fillOtp(otp);
+      if (!mounted) return;
+      if (_step == 2) {
+        _fillOtp(otp);
+      } else {
+        _pendingOtp = otp; // drain when OTP screen appears
+      }
     });
   }
 
@@ -60,9 +67,14 @@ class _LoginPageState extends State<LoginPage>
   void _fillOtp(String otp) {
     if (!mounted || otp.length != 6) return;
     for (int i = 0; i < 6; i++) {
-      _digitCtls[i].text = otp[i];
+      _digitCtls[i].value = TextEditingValue(
+        text: otp[i],
+        // Collapsed selection at end so the digit is visible and cursor is placed correctly
+        selection: TextSelection.collapsed(offset: 1),
+      );
     }
     _otpCtl.text = otp;
+    setState(() {}); // ensure all 6 boxes re-render with their new values
     if (!_isVerifying) Future.microtask(_verifyOtp);
   }
 
@@ -193,6 +205,12 @@ class _LoginPageState extends State<LoginPage>
           if (state is OtpSent) {
             setState(() { _step = 2; _mobile = state.mobile; });
             listenForCode(); // start SMS autofill listener
+            // If FCM delivered the OTP before this screen appeared, apply it now
+            if (_pendingOtp != null) {
+              final otp = _pendingOtp!;
+              _pendingOtp = null;
+              WidgetsBinding.instance.addPostFrameCallback((_) => _fillOtp(otp));
+            }
           } else if (state is AuthError) {
             setState(() { _isVerifying = false; });
             _err(state.message);
@@ -377,59 +395,81 @@ class _LoginPageState extends State<LoginPage>
   Widget _buildOtpBoxes() {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-      children: List.generate(6, (i) => SizedBox(
-        width: 44,
-        child: TextField(
-          controller: _digitCtls[i],
-          focusNode: _digitFocusNodes[i],
-          maxLength: 1,
-          keyboardType: TextInputType.number,
-          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-          textAlign: TextAlign.center,
-          autofocus: i == 0,
-          style: const TextStyle(
-            color: AppColors.textPrimary,
-            fontSize: 22,
-            fontWeight: FontWeight.bold,
-          ),
-          decoration: InputDecoration(
-            counterText: '',
-            filled: true,
-            fillColor: const Color(0xFF162230),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.darkBorder),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: AppColors.darkBorder),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: const BorderSide(color: AppColors.primary, width: 2),
-            ),
-          ),
-          onChanged: (v) {
-            if (v.isEmpty) {
-              // Backspace: move focus to previous box
-              if (i > 0) _digitFocusNodes[i - 1].requestFocus();
-            } else {
-              // Digit entered: advance focus
-              if (i < 5) {
-                _digitFocusNodes[i + 1].requestFocus();
-              } else {
-                _digitFocusNodes[i].unfocus();
+      children: List.generate(6, (i) {
+        return SizedBox(
+          width: 44,
+          child: KeyboardListener(
+            // Catch backspace when the box is already empty so focus retreats
+            focusNode: FocusNode(skipTraversal: true),
+            onKeyEvent: (event) {
+              if (event is KeyDownEvent &&
+                  event.logicalKey == LogicalKeyboardKey.backspace &&
+                  _digitCtls[i].text.isEmpty &&
+                  i > 0) {
+                _digitFocusNodes[i - 1].requestFocus();
               }
-            }
-            // Sync master controller and auto-submit when complete
-            final otp = _digitCtls.map((c) => c.text).join();
-            _otpCtl.text = otp;
-            if (otp.length == 6 && !_isVerifying) {
-              Future.microtask(_verifyOtp);
-            }
-          },
-        ),
-      )),
+            },
+            child: TextField(
+              controller: _digitCtls[i],
+              focusNode: _digitFocusNodes[i],
+              maxLength: 1,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              textAlign: TextAlign.center,
+              autofocus: i == 0,
+              style: const TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+              ),
+              decoration: InputDecoration(
+                counterText: '',
+                filled: true,
+                fillColor: const Color(0xFF162230),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide(color: AppColors.darkBorder),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide(color: AppColors.darkBorder),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: const BorderSide(color: AppColors.primary, width: 2),
+                ),
+              ),
+              // Select-all when the box is tapped so a new digit always replaces
+              // the existing one (avoids maxLength blocking input on pre-filled boxes)
+              onTap: () {
+                _digitCtls[i].selection = TextSelection(
+                  baseOffset: 0,
+                  extentOffset: _digitCtls[i].text.length,
+                );
+              },
+              onChanged: (v) {
+                if (v.isEmpty) {
+                  // Box was cleared — retreat to previous box
+                  if (i > 0) _digitFocusNodes[i - 1].requestFocus();
+                } else {
+                  // Digit entered — advance to next box
+                  if (i < 5) {
+                    _digitFocusNodes[i + 1].requestFocus();
+                  } else {
+                    _digitFocusNodes[i].unfocus();
+                  }
+                }
+                // Sync master controller and auto-submit when all 6 filled
+                final otp = _digitCtls.map((c) => c.text).join();
+                _otpCtl.text = otp;
+                if (otp.length == 6 && !_isVerifying) {
+                  Future.microtask(_verifyOtp);
+                }
+              },
+            ),
+          ),
+        );
+      }),
     );
   }
 

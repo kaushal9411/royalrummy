@@ -486,8 +486,15 @@ class GameBloc extends Bloc<GameEvent, GameState> {
   }
 
   void _onNextRound(GameNextRound event, Emitter<GameState> emit) {
-    if (_roomId == null) return;
+    if (_roomId == null || state is! GameInProgress) return;
+    final prev = state as GameInProgress;
     _socket.nextRound(_roomId!);
+    // Clear lastRoundResult immediately so the listener stops re-showing the
+    // result dialog while waiting for the server's next-round events.
+    emit(GameInProgress(
+      state: prev.state.copyWith(phase: 'waiting'),
+      chatMessages: prev.chatMessages,
+    ));
   }
 
   void _onError(GameErrorReceived event, Emitter<GameState> emit) {

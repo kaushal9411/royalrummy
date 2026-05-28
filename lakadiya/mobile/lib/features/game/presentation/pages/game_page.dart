@@ -58,6 +58,8 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
   final TextEditingController _chatInputCtl = TextEditingController();
   final ScrollController _chatScrollCtl = ScrollController();
   StateSetter? _chatModalSetState;
+  bool _bidDialogOpen = false;
+  bool _roundResultDialogOpen = false;
 
   // ── In-game private DMs ──
   String? _myUserId;
@@ -164,13 +166,34 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
   }
 
   void _showBidDialog() {
+    if (_bidDialogOpen) return;
+    _bidDialogOpen = true;
+    var bidWasPlaced = false;
+    final bloc = context.read<GameBloc>();
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (_) => BidDialog(
-        onBid: (bid) => context.read<GameBloc>().add(GamePlaceBid(bid)),
+        onBid: (bid) {
+          bidWasPlaced = true;
+          _bidDialogOpen = false;
+          bloc.add(GamePlaceBid(bid));
+        },
       ),
-    );
+    ).then((_) {
+      _bidDialogOpen = false;
+      // Don't reopen if the user already confirmed a bid — state just hasn't
+      // updated yet (server round-trip pending), so the check below would
+      // incorrectly think the bid is still missing.
+      if (!mounted || bidWasPlaced) return;
+      final gs = bloc.state;
+      if (gs is GameInProgress &&
+          gs.state.isBidding &&
+          gs.state.isMyTurn &&
+          !gs.state.bids.containsKey(gs.state.mySeat)) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _showBidDialog());
+      }
+    });
   }
 
   // ── Open half-screen WhatsApp-style room chat ──────────────────────────────
@@ -181,9 +204,9 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (_) => DraggableScrollableSheet(
-        initialChildSize: 0.55,
-        minChildSize: 0.35,
-        maxChildSize: 0.88,
+        initialChildSize: 0.90,
+        minChildSize: 0.50,
+        maxChildSize: 0.98,
         expand: false,
         builder: (_, __) => StatefulBuilder(
           builder: (_, setMs) {
@@ -311,7 +334,8 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
             if (state is GameInProgress) {
               if (state.state.isBidding &&
                   state.state.isMyTurn &&
-                  !state.state.bids.containsKey(state.state.mySeat)) {
+                  !state.state.bids.containsKey(state.state.mySeat) &&
+                  !_roundResultDialogOpen) {
                 WidgetsBinding.instance
                     .addPostFrameCallback((_) => _showBidDialog());
               }
@@ -329,7 +353,7 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
               }
               if (state.lastRoundResult != null &&
                   state.state.phase == 'round_end') {
-                _showRoundResult(ctx, state.lastRoundResult!);
+                _showRoundResult(ctx, state.lastRoundResult!, state.state.players);
               }
               if (state.gameResult != null &&
                   state.state.phase == 'game_end') {
@@ -892,65 +916,91 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
   }
 
   // ── Round result dialog ────────────────────────────────────────────────────
-  void _showRoundResult(BuildContext context, RoundResultData rr) {
+  void _showRoundResult(BuildContext context, RoundResultData rr, List<PlayerInfo> players) {
+    if (_roundResultDialogOpen) return;
+    _roundResultDialogOpen = true;
+    final bloc = context.read<GameBloc>();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       showDialog(
         context: context,
-        builder: (_) => AlertDialog(
-          backgroundColor: const Color(0xFF1A2035),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: Text('Round ${rr.round} Result',
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                  color: AppColors.accent, fontWeight: FontWeight.bold)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: rr.roundScores.map((s) {
-              final seat  = (s['seat'] as num).toInt();
-              final bid   = s['bid'];
-              final won   = s['won'];
-              final score = (s['score'] as num).toDouble();
-              return Container(
-                margin: const EdgeInsets.symmetric(vertical: 4),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.05),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text('Seat $seat  B:$bid  W:$won',
-                        style: const TextStyle(
-                            color: AppColors.textPrimary, fontSize: 13)),
-                    Text(
-                      score >= 0
-                          ? '+${score.toStringAsFixed(1)}'
-                          : score.toStringAsFixed(1),
-                      style: TextStyle(
-                        color: score >= 0
-                            ? AppColors.primaryLight
-                            : AppColors.danger,
-                        fontWeight: FontWeight.bold,
-                      ),
+        barrierDismissible: false,
+        builder: (dCtx) {
+          final rows = rr.roundScores.map((s) {
+            final seat  = (s['seat'] as num).toInt();
+            final bid   = s['bid'];
+            final won   = s['won'];
+            final score = (s['score'] as num).toDouble();
+            final name  = players
+                .firstWhere((p) => p.seat == seat,
+                    orElse: () => PlayerInfo(seat: seat, username: 'P${seat+1}', isBot: false))
+                .username;
+            final isPos = score >= 0;
+            return _RoundRow(name: name, bid: bid, won: won, score: score, isPos: isPos);
+          }).toList();
+
+          return Dialog(
+            backgroundColor: const Color(0xFF1A2035),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+            insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('Round ${rr.round} Result',
+                      style: const TextStyle(
+                          color: AppColors.accent,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15)),
+                  const SizedBox(height: 10),
+                  // Header row
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 6),
+                    child: Row(children: [
+                      Expanded(child: Text('Player',
+                          style: TextStyle(color: Colors.white38, fontSize: 10))),
+                      SizedBox(width: 36,
+                          child: Text('Bid', textAlign: TextAlign.center,
+                              style: TextStyle(color: Colors.white38, fontSize: 10))),
+                      SizedBox(width: 36,
+                          child: Text('Won', textAlign: TextAlign.center,
+                              style: TextStyle(color: Colors.white38, fontSize: 10))),
+                      SizedBox(width: 44,
+                          child: Text('Score', textAlign: TextAlign.right,
+                              style: TextStyle(color: Colors.white38, fontSize: 10))),
+                    ]),
+                  ),
+                  const SizedBox(height: 4),
+                  ...rows,
+                  const SizedBox(height: 4),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      onPressed: () {
+                        Navigator.of(dCtx).pop();
+                        bloc.add(GameNextRound());
+                      },
+                      child: const Text('Next Round',
+                          style: TextStyle(color: AppColors.primary, fontSize: 13)),
                     ),
-                  ],
-                ),
-              );
-            }).toList(),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-                context.read<GameBloc>().add(GameNextRound());
-              },
-              child: const Text('Next Round',
-                  style: TextStyle(color: AppColors.primary)),
+                  ),
+                ],
+              ),
             ),
-          ],
-        ),
-      );
+          );
+        },
+      ).then((_) {
+        _roundResultDialogOpen = false;
+        if (!mounted) return;
+        // If bidding started while result was showing, open bid dialog now
+        final gs = bloc.state;
+        if (gs is GameInProgress &&
+            gs.state.isBidding &&
+            gs.state.isMyTurn &&
+            !gs.state.bids.containsKey(gs.state.mySeat)) {
+          _showBidDialog();
+        }
+      });
     });
   }
 
@@ -1916,11 +1966,11 @@ class _ChatSheetContent extends StatelessWidget {
                     },
                   ),
           ),
-          // input
-          SafeArea(
-            top: false,
-            child: Container(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+          // input — bottom padding absorbs keyboard so field stays visible
+          Builder(builder: (bCtx) {
+            final keyboardH = MediaQuery.viewInsetsOf(bCtx).bottom;
+            return Container(
+              padding: EdgeInsets.fromLTRB(12, 8, 12, 8 + keyboardH),
               decoration: const BoxDecoration(
                 border: Border(top: BorderSide(color: Colors.white12)),
                 color: Color(0xFF07101C),
@@ -1955,8 +2005,8 @@ class _ChatSheetContent extends StatelessWidget {
                   ),
                 ),
               ]),
-            ),
-          ),
+            );
+          }),
         ],
       ),
     );
@@ -2174,6 +2224,67 @@ class _DmToastBubble extends StatelessWidget {
             child: const Icon(Icons.close_rounded, color: Colors.white38, size: 14),
           ),
         ]),
+      ),
+    );
+  }
+}
+
+// ── Round result row ──────────────────────────────────────────────────────────
+class _RoundRow extends StatelessWidget {
+  final String name;
+  final dynamic bid;
+  final dynamic won;
+  final double score;
+  final bool isPos;
+  const _RoundRow({
+    required this.name,
+    required this.bid,
+    required this.won,
+    required this.score,
+    required this.isPos,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              name,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: AppColors.textPrimary, fontSize: 12, fontWeight: FontWeight.w500),
+            ),
+          ),
+          SizedBox(
+            width: 36,
+            child: Text('$bid', textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white70, fontSize: 12)),
+          ),
+          SizedBox(
+            width: 36,
+            child: Text('$won', textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white70, fontSize: 12)),
+          ),
+          SizedBox(
+            width: 44,
+            child: Text(
+              isPos ? '+${score.toStringAsFixed(0)}' : score.toStringAsFixed(0),
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                color: isPos ? AppColors.primaryLight : AppColors.danger,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
