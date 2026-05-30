@@ -3,10 +3,11 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
-    <uses-permission android:name="android.permission.RECEIVE_SMS" />
-    <!-- READ_SMS removed: sms_autofill uses SMS Retriever API which needs no read permission -->
-    <!-- READ_PHONE_STATE kept: required by Razorpay SDK for fraud detection -->
+    <!-- SMS permissions: sms_autofill v2.x uses the SMS Retriever API which requires NO
+         RECEIVE_SMS or READ_SMS permissions — the system delivers only the matching OTP.
+         READ_PHONE_STATE kept: required by Razorpay SDK for device fingerprinting / fraud detection. -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <application
@@ -14,7 +15,10 @@
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:networkSecurityConfig="@xml/network_security_config"
-        android:usesCleartextTraffic="false">
+        android:usesCleartextTraffic="false"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="false">
         <activity
             android:name=".MainActivity"
             android:exported="true"

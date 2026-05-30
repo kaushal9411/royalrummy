@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
+import 'package:flutter/foundation.dart';
 import '../constants/app_constants.dart';
 import 'storage_service.dart';
 
@@ -44,16 +45,15 @@ class ApiService {
         if (token != null && token.isNotEmpty) {
           options.headers['Authorization'] = 'Bearer $token';
         }
-        print('[API] ${options.method} ${options.path}');
+        if (kDebugMode) debugPrint('[API] ${options.method} ${options.path}');
         handler.next(options);
       },
       onResponse: (response, handler) {
-        print('[API] Response: ${response.statusCode} - ${response.data}');
+        if (kDebugMode) debugPrint('[API] Response: ${response.statusCode}');
         handler.next(response);
       },
       onError: (error, handler) {
-        print('[API] Error: ${error.type} - ${error.message}');
-        print('[API] Response: ${error.response?.data}');
+        if (kDebugMode) debugPrint('[API] Error: ${error.type} - ${error.message}');
         handler.next(error);
       },
     ));

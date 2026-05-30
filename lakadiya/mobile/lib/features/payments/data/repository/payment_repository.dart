@@ -1,7 +1,12 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'dart:io';
 import 'package:lakadiya/core/services/api_service.dart';
 import '../models/payment_model.dart';
+
+// Only log in debug builds — payment IDs, amounts, balances must not appear in
+// release logcat (accessible via adb by anyone with physical device access).
+void _log(String msg) { if (kDebugMode) debugPrint(msg); }
 
 class PaymentRepository {
   final ApiService _apiService;
@@ -10,19 +15,18 @@ class PaymentRepository {
 
   Future<PaymentOrder> initiateAddMoney(double amount) async {
     try {
-      print('[PaymentRepo] Initiating payment for amount: $amount');
+      _log('[PaymentRepo] Initiating payment for amount: $amount');
       final response = await _apiService.post(
         '/payments/initiate',
         data: {'amount': amount},
       );
-      print('[PaymentRepo] Response data: ${response.data}');
+      _log('[PaymentRepo] Order created successfully');
       return PaymentOrder.fromJson(response.data);
     } on DioException catch (e) {
-      print('[PaymentRepo Error] DioException: ${e.type} - ${e.message}');
-      print('[PaymentRepo Error] Response: ${e.response?.data}');
+      _log('[PaymentRepo Error] DioException: ${e.type} - ${e.message}');
       throw _handleDioError(e);
     } catch (e) {
-      print('[PaymentRepo Error] Unexpected error: $e');
+      _log('[PaymentRepo Error] Unexpected error: $e');
       throw 'Unexpected error: ${e.toString()}';
     }
   }
@@ -33,7 +37,7 @@ class PaymentRepository {
     required String signature,
   }) async {
     try {
-      print('[PaymentRepo] Verifying payment - PaymentID: $paymentId, OrderID: $orderId');
+      _log('[PaymentRepo] Verifying payment');
       final response = await _apiService.post(
         '/payments/verify',
         data: {
@@ -42,31 +46,27 @@ class PaymentRepository {
           'signature': signature,
         },
       );
-      print('[PaymentRepo] Verification response data: ${response.data}');
-      final verification = PaymentVerification.fromJson(response.data);
-      print('[PaymentRepo] Verification object: $verification');
-      return verification;
+      _log('[PaymentRepo] Verification successful');
+      return PaymentVerification.fromJson(response.data);
     } on DioException catch (e) {
-      print('[PaymentRepo Error] DioException during verify: ${e.type} - ${e.message}');
-      print('[PaymentRepo Error] Response: ${e.response?.data}');
+      _log('[PaymentRepo Error] DioException during verify: ${e.type} - ${e.message}');
       throw _handleDioError(e);
     } catch (e) {
-      print('[PaymentRepo Error] Unexpected error during verify: $e');
+      _log('[PaymentRepo Error] Unexpected error during verify: $e');
       throw 'Unexpected error: ${e.toString()}';
     }
   }
 
   Future<WalletBalance> getWalletBalance() async {
     try {
-      print('[PaymentRepo] Getting wallet balance');
+      _log('[PaymentRepo] Getting wallet balance');
       final response = await _apiService.get('/payments/balance');
-      print('[PaymentRepo] Balance response data: ${response.data}');
       return WalletBalance.fromJson(response.data);
     } on DioException catch (e) {
-      print('[PaymentRepo Error] DioException: ${e.type} - ${e.message}');
+      _log('[PaymentRepo Error] DioException: ${e.type} - ${e.message}');
       throw _handleDioError(e);
     } catch (e) {
-      print('[PaymentRepo Error] Unexpected error: $e');
+      _log('[PaymentRepo Error] Unexpected error: $e');
       throw 'Unexpected error: ${e.toString()}';
     }
   }
@@ -76,23 +76,19 @@ class PaymentRepository {
     int offset = 0,
   }) async {
     try {
-      print('[PaymentRepo] Getting transaction history - limit: $limit, offset: $offset');
+      _log('[PaymentRepo] Getting transaction history');
       final response = await _apiService.get(
         '/payments/transactions',
-        params: {
-          'limit': limit,
-          'offset': offset,
-        },
+        params: {'limit': limit, 'offset': offset},
       );
-      print('[PaymentRepo] History response data: ${response.data}');
       return (response.data as List)
           .map((item) => Transaction.fromJson(item as Map<String, dynamic>))
           .toList();
     } on DioException catch (e) {
-      print('[PaymentRepo Error] DioException: ${e.type} - ${e.message}');
+      _log('[PaymentRepo Error] DioException: ${e.type} - ${e.message}');
       throw _handleDioError(e);
     } catch (e) {
-      print('[PaymentRepo Error] Unexpected error: $e');
+      _log('[PaymentRepo Error] Unexpected error: $e');
       throw 'Unexpected error: ${e.toString()}';
     }
   }
@@ -102,41 +98,36 @@ class PaymentRepository {
     int offset = 0,
   }) async {
     try {
-      print('[PaymentRepo] Getting withdrawal requests - limit: $limit, offset: $offset');
+      _log('[PaymentRepo] Getting withdrawal requests');
       final response = await _apiService.get(
         '/payments/withdrawals',
-        params: {
-          'limit': limit,
-          'offset': offset,
-        },
+        params: {'limit': limit, 'offset': offset},
       );
-      print('[PaymentRepo] Withdrawals response data: ${response.data}');
       return (response.data as List)
           .map((item) => Transaction.fromJson(item as Map<String, dynamic>))
           .toList();
     } on DioException catch (e) {
-      print('[PaymentRepo Error] DioException: ${e.type} - ${e.message}');
+      _log('[PaymentRepo Error] DioException: ${e.type} - ${e.message}');
       throw _handleDioError(e);
     } catch (e) {
-      print('[PaymentRepo Error] Unexpected error: $e');
+      _log('[PaymentRepo Error] Unexpected error: $e');
       throw 'Unexpected error: ${e.toString()}';
     }
   }
 
   Future<Map<String, dynamic>> requestWithdrawal(double amount) async {
     try {
-      print('[PaymentRepo] Requesting withdrawal for amount: $amount');
+      _log('[PaymentRepo] Requesting withdrawal');
       final response = await _apiService.post(
         '/payments/withdraw',
         data: {'amount': amount},
       );
-      print('[PaymentRepo] Withdrawal response data: ${response.data}');
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
-      print('[PaymentRepo Error] DioException: ${e.type} - ${e.message}');
+      _log('[PaymentRepo Error] DioException: ${e.type} - ${e.message}');
       throw _handleDioError(e);
     } catch (e) {
-      print('[PaymentRepo Error] Unexpected error: $e');
+      _log('[PaymentRepo Error] Unexpected error: $e');
       throw 'Unexpected error: ${e.toString()}';
     }
   }
@@ -153,11 +144,9 @@ class PaymentRepository {
         if (error.response != null) {
           final statusCode = error.response!.statusCode;
           final data = error.response!.data;
-          
           if (data is Map && data.containsKey('message')) {
             return '${data['message']} (Error $statusCode)';
           }
-          
           return 'Server error (Error $statusCode)';
         }
         return 'Server error occurred';

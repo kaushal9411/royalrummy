@@ -43,16 +43,25 @@ class _KycPageState extends State<KycPage> {
   }
 
   Future<void> _pickImage(bool isPanDoc) async {
-    final picked = await ImagePicker().pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 85,
-      maxWidth: 1200,
-    );
-    if (picked == null) return;
-    setState(() {
-      if (isPanDoc) { _panDoc = File(picked.path); }
-      else          { _selfie = File(picked.path); }
-    });
+    try {
+      final picked = await ImagePicker().pickImage(
+        // PAN card: pick from gallery; selfie: must use live camera (identity verification)
+        source: isPanDoc ? ImageSource.gallery : ImageSource.camera,
+        imageQuality: 85,
+        maxWidth: 1200,
+      );
+      if (picked == null) return;
+      setState(() {
+        if (isPanDoc) { _panDoc = File(picked.path); }
+        else          { _selfie = File(picked.path); }
+      });
+    } catch (e) {
+      if (mounted) {
+        _snack(isPanDoc
+            ? 'Cannot access gallery. Please allow photo access in device Settings.'
+            : 'Cannot access camera. Please allow camera access in device Settings.');
+      }
+    }
   }
 
   Future<void> _submit() async {

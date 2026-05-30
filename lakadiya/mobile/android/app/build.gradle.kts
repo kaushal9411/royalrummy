@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -5,6 +7,14 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
     id("com.google.gms.google-services")
 }
+
+// Load local.properties — never committed to git, safe for secrets
+val localProps = Properties().also { props ->
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { props.load(it) }
+}
+
+fun localProp(key: String): String? = System.getenv(key) ?: localProps.getProperty(key)
 
 android {
     namespace = "com.lakadiya.lakadiya"
@@ -26,7 +36,7 @@ android {
         applicationId = "com.lakadiya.lakadiya"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        minSdk = 23  // flutter_secure_storage v9.x requires API 23+ for encryptedSharedPreferences
         targetSdk = 34
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -34,16 +44,15 @@ android {
 
     signingConfigs {
         create("release") {
-            // Read from local.properties or env vars — never commit keystore to git
-            val keystoreFile   = System.getenv("KEYSTORE_FILE")   ?: (project.findProperty("KEYSTORE_FILE") as String?)
-            val keystorePass   = System.getenv("KEYSTORE_PASSWORD") ?: (project.findProperty("KEYSTORE_PASSWORD") as String?)
-            val keyAlias       = System.getenv("KEY_ALIAS")        ?: (project.findProperty("KEY_ALIAS") as String?)
-            val keyPass        = System.getenv("KEY_PASSWORD")      ?: (project.findProperty("KEY_PASSWORD") as String?)
-            if (keystoreFile != null) {
-                storeFile = file(keystoreFile)
-                storePassword = keystorePass
-                this.keyAlias = keyAlias
-                keyPassword = keyPass
+            val ksFile = localProp("KEYSTORE_FILE")
+            val ksPass = localProp("KEYSTORE_PASSWORD")
+            val kAlias = localProp("KEY_ALIAS")
+            val kPass  = localProp("KEY_PASSWORD")
+            if (ksFile != null) {
+                storeFile     = file(ksFile)
+                storePassword = ksPass
+                this.keyAlias = kAlias
+                keyPassword   = kPass
             }
         }
     }

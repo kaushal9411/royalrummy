@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 class PaymentOrder {
   final String orderId;
   final int    amount;        // paise — used directly by Razorpay SDK
@@ -86,7 +88,7 @@ class PaymentVerification {
   });
 
   factory PaymentVerification.fromJson(Map<String, dynamic> json) {
-    print('[PaymentVerification] Parsing JSON: $json');
+    if (kDebugMode) debugPrint('[PaymentVerification] Parsing JSON: $json');
     
     try {
       final verification = PaymentVerification(
@@ -98,10 +100,10 @@ class PaymentVerification {
         type: json['type']?.toString() ?? 'add',
         message: json['message']?.toString() ?? '',
       );
-      print('[PaymentVerification] Parsed successfully: $verification');
+      if (kDebugMode) debugPrint('[PaymentVerification] Parsed successfully: $verification');
       return verification;
     } catch (e) {
-      print('[PaymentVerification] Error parsing: $e');
+      if (kDebugMode) debugPrint('[PaymentVerification] Error parsing: $e');
       rethrow;
     }
   }
@@ -153,7 +155,7 @@ class WalletBalance {
   });
 
   factory WalletBalance.fromJson(Map<String, dynamic> json) {
-    print('[WalletBalance] Parsing JSON: $json');
+    if (kDebugMode) debugPrint('[WalletBalance] Parsing JSON: $json');
     
     try {
       final coins = _toInt(json['coins']);
@@ -164,10 +166,10 @@ class WalletBalance {
         totalWithdrawn: _toDouble(json['total_withdrawn']),
         currentBalance: coins.toDouble(),  // SYNC: currentBalance = coins
       );
-      print('[WalletBalance] Parsed successfully: $balance');
+      if (kDebugMode) debugPrint('[WalletBalance] Parsed successfully: $balance');
       return balance;
     } catch (e) {
-      print('[WalletBalance] Error parsing: $e');
+      if (kDebugMode) debugPrint('[WalletBalance] Error parsing: $e');
       rethrow;
     }
   }
@@ -228,7 +230,7 @@ class Transaction {
   });
 
   factory Transaction.fromJson(Map<String, dynamic> json) {
-    print('[Transaction] Parsing JSON: $json');
+    if (kDebugMode) debugPrint('[Transaction] Parsing JSON: $json');
 
     try {
       DateTime parseDateTime(dynamic value) {
@@ -258,10 +260,10 @@ class Transaction {
         razorpayOrderId:   json['razorpay_order_id']?.toString(),
         razorpayPaymentId: json['razorpay_payment_id']?.toString(),
       );
-      print('[Transaction] Parsed successfully: $transaction');
+      if (kDebugMode) debugPrint('[Transaction] Parsed successfully: $transaction');
       return transaction;
     } catch (e) {
-      print('[Transaction] Error parsing: $e');
+      if (kDebugMode) debugPrint('[Transaction] Error parsing: $e');
       rethrow;
     }
   }
