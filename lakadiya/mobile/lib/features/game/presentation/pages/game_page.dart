@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -61,6 +62,9 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
   bool _bidDialogOpen = false;
   bool _roundResultDialogOpen = false;
 
+  // Responsible gaming: show a reminder every 30 minutes of continuous play
+  Timer? _reminderTimer;
+
   // ── In-game private DMs ──
   String? _myUserId;
   String? _myUsername;
@@ -95,6 +99,39 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
       _myUserId   = authState.user.id;
       _myUsername = authState.user.username;
     }
+
+    // Responsible gaming reminder — fires after 30 min, then every 30 min
+    _reminderTimer = Timer.periodic(const Duration(minutes: 30), (_) {
+      if (mounted) _showReminderBanner();
+    });
+  }
+
+  void _showReminderBanner() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 8),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: const Color(0xFF0E1A2E),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: AppColors.accent.withValues(alpha: 0.4)),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Responsible Gaming Reminder',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+            const SizedBox(height: 4),
+            const Text('You\'ve been playing for 30+ minutes. Take a break if needed.',
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+            const SizedBox(height: 2),
+            const Text('Help: iCare 1800-599-0019',
+                style: TextStyle(color: AppColors.accent, fontSize: 11, fontWeight: FontWeight.w600)),
+          ],
+        ),
+      ),
+    );
   }
 
   void _onRoomChat(dynamic data) {
@@ -151,6 +188,7 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
 
   @override
   void dispose() {
+    _reminderTimer?.cancel();
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
       DeviceOrientation.portraitDown,

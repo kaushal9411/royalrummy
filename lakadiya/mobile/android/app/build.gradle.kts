@@ -32,11 +32,30 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        create("release") {
+            // Read from local.properties or env vars — never commit keystore to git
+            val keystoreFile   = System.getenv("KEYSTORE_FILE")   ?: (project.findProperty("KEYSTORE_FILE") as String?)
+            val keystorePass   = System.getenv("KEYSTORE_PASSWORD") ?: (project.findProperty("KEYSTORE_PASSWORD") as String?)
+            val keyAlias       = System.getenv("KEY_ALIAS")        ?: (project.findProperty("KEY_ALIAS") as String?)
+            val keyPass        = System.getenv("KEY_PASSWORD")      ?: (project.findProperty("KEY_PASSWORD") as String?)
+            if (keystoreFile != null) {
+                storeFile = file(keystoreFile)
+                storePassword = keystorePass
+                this.keyAlias = keyAlias
+                keyPassword = keyPass
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            val rel = signingConfigs.getByName("release")
+            // Use release keystore if configured, otherwise fall back to debug for local builds
+            signingConfig = if (rel.storeFile != null) rel else signingConfigs.getByName("debug")
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
 }

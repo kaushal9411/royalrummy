@@ -3,9 +3,11 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:go_router/go_router.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:sms_autofill/sms_autofill.dart';
 import '../../../../core/services/fcm_service.dart';
+import '../../../../core/services/storage_service.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../bloc/auth_bloc.dart';
 import '../widgets/auth_shared.dart';
@@ -22,6 +24,7 @@ class _LoginPageState extends State<LoginPage>
   String _mobile = '';
   bool _isVerifying = false;
   String? _pendingOtp; // buffer for OTP that arrives before _step reaches 2
+  bool _tosAccepted = false; // must agree before sending OTP
 
   final _mobileCtl = TextEditingController();
   final _otpCtl    = TextEditingController();
@@ -42,6 +45,8 @@ class _LoginPageState extends State<LoginPage>
   @override
   void initState() {
     super.initState();
+    // Restore previously accepted ToS so returning users skip the checkbox
+    _tosAccepted = StorageService.getBool('tos_accepted');
     _floatCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 5))..repeat();
     _enterCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
     _fadeIn  = CurvedAnimation(parent: _enterCtrl, curve: Curves.easeOut);
@@ -289,9 +294,64 @@ class _LoginPageState extends State<LoginPage>
             prefixStyle: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold, fontSize: 16),
           ),
         ),
-        const SizedBox(height: 28),
+        const SizedBox(height: 20),
+        // ToS + Privacy Policy acceptance — required by Google Play
+        GestureDetector(
+          onTap: () async {
+            final next = !_tosAccepted;
+            setState(() => _tosAccepted = next);
+            await StorageService.setBool('tos_accepted', next);
+          },
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 20, height: 20,
+                child: Checkbox(
+                  value: _tosAccepted,
+                  onChanged: (v) async {
+                    setState(() => _tosAccepted = v ?? false);
+                    await StorageService.setBool('tos_accepted', v ?? false);
+                  },
+                  activeColor: AppColors.primary,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: RichText(
+                  text: TextSpan(
+                    style: const TextStyle(color: AppColors.textSecondary, fontSize: 12, height: 1.5),
+                    children: [
+                      const TextSpan(text: 'I am 18+ and agree to the '),
+                      WidgetSpan(
+                        child: GestureDetector(
+                          onTap: () => context.push('/terms'),
+                          child: const Text('Terms of Service',
+                              style: TextStyle(color: AppColors.primary, fontSize: 12,
+                                  decoration: TextDecoration.underline)),
+                        ),
+                      ),
+                      const TextSpan(text: ' and '),
+                      WidgetSpan(
+                        child: GestureDetector(
+                          onTap: () => context.push('/privacy-policy'),
+                          child: const Text('Privacy Policy',
+                              style: TextStyle(color: AppColors.primary, fontSize: 12,
+                                  decoration: TextDecoration.underline)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
         GradientButton(
-          onTap: loading ? null : _sendOtp,
+          onTap: (loading || !_tosAccepted) ? null : _sendOtp,
           child: loading
               ? const SizedBox(height: 22, width: 22,
                   child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white))

@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Allow cleartext (HTTP) for local development servers -->
+    <!-- Cleartext ONLY for local dev emulator/device — never for production domains -->
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="true">localhost</domain>
         <domain includeSubdomains="false">10.0.2.2</domain>
     </domain-config>
-    <!-- Default: trust system CAs for all other domains -->
-    <base-config cleartextTrafficPermitted="true">
+    <!-- All other traffic must be HTTPS (TLS) — required for financial app Play approval -->
+    <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>

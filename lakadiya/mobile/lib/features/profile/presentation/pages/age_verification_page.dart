@@ -16,6 +16,7 @@ class _AgeVerificationPageState extends State<AgeVerificationPage> {
   DateTime? _dob;
   bool _saving = false;
   String? _error;
+  bool _stateConfirmed = false; // restricted-states declaration
 
   int get _age {
     if (_dob == null) return 0;
@@ -159,13 +160,54 @@ class _AgeVerificationPageState extends State<AgeVerificationPage> {
                 ),
               ],
 
-              const SizedBox(height: 28),
+              const SizedBox(height: 20),
+
+              // Restricted states declaration — legally required
+              GestureDetector(
+                onTap: () => setState(() => _stateConfirmed = !_stateConfirmed),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    color: const Color(0xFF0E1A2E),
+                    border: Border.all(
+                      color: _stateConfirmed
+                          ? AppColors.primary.withValues(alpha: 0.5)
+                          : AppColors.darkBorder,
+                    ),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(
+                        width: 20, height: 20,
+                        child: Checkbox(
+                          value: _stateConfirmed,
+                          onChanged: (v) => setState(() => _stateConfirmed = v ?? false),
+                          activeColor: AppColors.primary,
+                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      const Expanded(
+                        child: Text(
+                          'I confirm I am NOT a resident of Andhra Pradesh, Telangana, Assam, Nagaland, Odisha, or Sikkim — states where real-money gaming is restricted.',
+                          style: TextStyle(color: AppColors.textSecondary, fontSize: 12, height: 1.5),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 20),
 
               // Confirm button
               SizedBox(
                 height: 52,
                 child: ElevatedButton(
-                  onPressed: (_saving || (_dob != null && _age < 18)) ? null : _confirm,
+                  onPressed: (_saving || !_stateConfirmed || (_dob != null && _age < 18)) ? null : _confirm,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primary,
                     disabledBackgroundColor: AppColors.textMuted,

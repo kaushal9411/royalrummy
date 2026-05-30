@@ -1,4 +1,5 @@
 const paymentService = require('./payment.service');
+const { isExcluded, checkSpendLimit } = require('../responsible_gaming/responsible_gaming.service');
 const { getIO } = require('../../socket/socket.manager');
 const { sendNotification } = require('../notifications/notification.service');
 const { sendWithdrawalRequestEmail, sendWithdrawalStatusEmail, sendPaymentReceiptEmail } = require('../email/email.service');
@@ -12,8 +13,13 @@ const initiateAddMoney = async (req, res, next) => {
   try {
     const { amount } = req.body;
     console.log(`[Payment Controller] Initiate - User: ${req.user?.id}, Amount: ${amount}`);
-    
+
     if (!amount) throw { status: 400, message: 'Amount is required' };
+
+    // Responsible gaming: block self-excluded users from adding money
+    if (await isExcluded(req.user.id)) {
+      throw { status: 403, message: 'You have self-excluded from the platform. Manage this in Settings → Responsible Gaming.' };
+    }
 
     const orderDetails = await paymentService.createPaymentOrder(req.user.id, amount, 'add');
     console.log(`[Payment Controller] Order created successfully`);

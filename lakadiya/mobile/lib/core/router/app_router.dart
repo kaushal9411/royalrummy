@@ -30,8 +30,11 @@ GoRouter createRouter(AuthBloc authBloc, PaymentBloc paymentBloc) => GoRouter(
   navigatorKey: _rootKey,
   initialLocation: '/splash',
   redirect: (context, state) {
-    // Never redirect away from the splash screen
     if (state.matchedLocation == '/splash') return null;
+
+    // Legal pages are public — accessible without auth (linked from login ToS checkbox)
+    const publicRoutes = {'/terms', '/privacy-policy', '/data-safety'};
+    if (publicRoutes.contains(state.matchedLocation)) return null;
 
     final isAuth = authBloc.state is AuthAuthenticated;
     final isAuthRoute = state.matchedLocation.startsWith('/login');
