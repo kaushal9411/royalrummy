@@ -22,13 +22,19 @@ class _SocialPageState extends State<SocialPage>
   List<Map<String, dynamic>> _friends = [];
   List<Map<String, dynamic>> _pendingRequests = [];
   List<Map<String, dynamic>> _convos = [];
+  int  _totalUnread = 0;
   bool _loading = true;
 
   @override
   void initState() {
     super.initState();
     _tabs = TabController(length: 4, vsync: this);
-    _tabs.addListener(() { if (mounted) setState(() {}); });
+    _tabs.addListener(() {
+      if (!mounted) return;
+      setState(() {});
+      // Refresh conversation list + unread count whenever Messages tab is opened
+      if (_tabs.index == 3) _loadConvos();
+    });
     _load();
 
     SocketService().on('private_message', _onIncomingMessage);
@@ -55,19 +61,37 @@ class _SocialPageState extends State<SocialPage>
         _repo.getFriends(),
         _repo.getPendingRequests(),
         _repo.getConversationList(),
+        _repo.getUnreadCount(),
       ]);
       if (mounted) {
         setState(() {
-          _players = results[0];
-          _friends = results[1];
-          _pendingRequests = results[2];
-          _convos  = results[3];
-          _loading = false;
+          _players       = results[0] as List<Map<String, dynamic>>;
+          _friends       = results[1] as List<Map<String, dynamic>>;
+          _pendingRequests = results[2] as List<Map<String, dynamic>>;
+          _convos        = results[3] as List<Map<String, dynamic>>;
+          _totalUnread   = results[4] as int;
+          _loading       = false;
         });
       }
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  // Refresh only conversations + total unread (called when Messages tab opens or DM closes)
+  Future<void> _loadConvos() async {
+    try {
+      final results = await Future.wait([
+        _repo.getConversationList(),
+        _repo.getUnreadCount(),
+      ]);
+      if (mounted) {
+        setState(() {
+          _convos      = results[0] as List<Map<String, dynamic>>;
+          _totalUnread = results[1] as int;
+        });
+      }
+    } catch (_) {}
   }
 
   void _onSearch(String q) {
@@ -85,9 +109,7 @@ class _SocialPageState extends State<SocialPage>
 
   void _onIncomingMessage(dynamic data) {
     if (!mounted) return;
-    _repo.getConversationList().then((list) {
-      if (mounted) setState(() => _convos = list);
-    });
+    _loadConvos(); // refresh conversation list + unread badge
   }
 
   void _onGameInvite(dynamic data) {
@@ -130,7 +152,9 @@ class _SocialPageState extends State<SocialPage>
   }
 
   void _openDm(Map<String, dynamic> user) {
-    context.go('/dm/${user['id']}', extra: user['username'] ?? 'Player');
+    // push keeps the Social page alive; when DM screen pops, we reload convos
+    context.push('/dm/${user['id']}', extra: user['username'] ?? 'Player')
+        .then((_) { if (mounted) _loadConvos(); });
   }
 
   void _sendInvite(Map<String, dynamic> user) {
@@ -252,7 +276,7 @@ class _SocialPageState extends State<SocialPage>
             const Tab(text: 'Players'),
             Tab(text: 'Friends (${_friends.length})'),
             Tab(text: 'Requests (${_pendingRequests.length})'),
-            const Tab(text: 'Messages'),
+            Tab(text: _totalUnread > 0 ? 'Messages ($_totalUnread)' : 'Messages'),
           ],
         ),
       ),

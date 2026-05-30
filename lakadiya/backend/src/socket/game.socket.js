@@ -12,8 +12,8 @@ const gameStates = new Map();
 // Track which socket IDs belong to which userId + roomId
 const userSockets = new Map(); // userId => socketId
 
-// Personal room name for direct user targeting
-const userRoom = (userId) => `user_${userId}`;
+// Personal room name — MUST match the format used in socket.manager.js: user:{userId}
+const userRoom = (userId) => `user:${userId}`;
 
 const BOT_DELAY_MS = 1200; // simulate bot thinking
 
@@ -462,8 +462,24 @@ function registerGameSocket(io, socket) {
     if (!text?.trim() || !toUserId) return;
     try {
       const msgService = require('../modules/messages/message.service');
+      const { sendNotification } = require('../modules/notifications/notification.service');
+
       const msg = await msgService.sendMessage(userId, toUserId, text.trim());
-      // Save in-app notification so recipient sees it in their notification list
+
+      const payload = {
+        id:          msg.id,
+        sender_id:   msg.sender_id,
+        sender_name: socket.username,   // include sender name for recipient avatar
+        receiver_id: msg.receiver_id,
+        text:        msg.text,
+        created_at:  msg.created_at,
+      };
+
+      // Real-time delivery to recipient's personal room
+      io.to(userRoom(toUserId)).emit('private_message', payload);
+      // NOTE: no echo to sender — DM screen already added the message optimistically
+
+      // In-app notification record
       query(
         `INSERT INTO notifications (user_id, type, title, body, data)
          VALUES ($1, 'private_message', $2, $3, $4)`,
@@ -471,10 +487,20 @@ function registerGameSocket(io, socket) {
          text.trim().substring(0, 100),
          JSON.stringify({ fromUserId: userId, messageId: msg.id })]
       ).catch(() => {});
-      // Real-time delivery to recipient's personal room
-      io.to(userRoom(toUserId)).emit('private_message', msg);
-      // Echo back to sender so their DM screen updates immediately
-      socket.emit('private_message', msg);
+
+      // FCM push notification so recipient gets alerted when app is in background
+      sendNotification(
+        toUserId,
+        socket.username,                        // notification title = sender username
+        text.trim().substring(0, 100),          // notification body  = message preview
+        {
+          type:        'MESSAGE_RECEIVED',       // matches Flutter _handleMessage check
+          senderId:    userId,
+          senderName:  socket.username,
+          messageText: text.trim().substring(0, 100),
+        },
+        'default_channel'
+      ).catch(() => {});
     } catch (err) {
       logger.error('private_message error', err);
     }
@@ -484,19 +510,40 @@ function registerGameSocket(io, socket) {
   socket.on('send_game_invite', async ({ toUserId, roomId, roomCode }) => {
     if (!toUserId || !roomId) return;
     try {
+      const { sendNotification } = require('../modules/notifications/notification.service');
+
+      // In-app notification record
       await query(
         `INSERT INTO notifications (user_id, type, title, body, data)
-         VALUES ($1, 'game_invite', 'Game Invite', $2, $3)`,
+         VALUES ($1, 'game_invite', $2, $3, $4)`,
         [toUserId,
-         `${socket.username} invited you to play!`,
+         `${socket.username} invited you!`,
+         `${socket.username} invited you to join room ${roomCode}`,
          JSON.stringify({ fromUserId: userId, roomId, roomCode })]
       );
+
+      // Real-time socket delivery
       io.to(userRoom(toUserId)).emit('game_invite', {
         fromUserId: userId,
         fromUsername: socket.username,
         roomId,
         roomCode,
       });
+
+      // FCM push so recipient sees it even when app is in background
+      sendNotification(
+        toUserId,
+        `🎮 ${socket.username} invited you!`,
+        `Join room ${roomCode} — tap to play`,
+        {
+          type:         'GAME_INVITE',
+          fromUserId:   userId,
+          fromUsername: socket.username,
+          roomId,
+          roomCode,
+        },
+        'room_channel'
+      ).catch(() => {});
     } catch (err) {
       logger.error('send_game_invite error', err);
     }

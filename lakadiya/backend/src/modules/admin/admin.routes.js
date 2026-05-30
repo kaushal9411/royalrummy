@@ -6,6 +6,7 @@ const { sendAdminBroadcast, getBroadcastHistory } = require('../notifications/no
 const { getSettings, updateSettings } = require('./settings.service');
 const { listCredentials, setCredential, deleteCredential } = require('../credentials/credentials.service');
 const { approveKyc, rejectKyc, listPendingKyc } = require('../kyc/kyc.service');
+const { setSelfExclusion, updateSettings: updateRgSettings } = require('../responsible_gaming/responsible_gaming.service');
 
 router.use(authenticateAdmin);
 
@@ -89,6 +90,15 @@ router.patch('/settings', async (req, res, next) => {
   try {
     const updated = await updateSettings(req.body);
     res.json(updated);
+  } catch (e) { next(e); }
+});
+
+// ── Responsible gaming (admin override) ──────────────────────────────────────
+// Lift a user's self-exclusion — admin can remove it on user's behalf
+router.post('/users/:userId/lift-exclusion', async (req, res, next) => {
+  try {
+    await setSelfExclusion(req.params.userId, 0); // days=0 clears exclusion
+    res.json({ message: 'Self-exclusion lifted' });
   } catch (e) { next(e); }
 });
 

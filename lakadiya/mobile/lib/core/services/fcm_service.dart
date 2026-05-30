@@ -52,15 +52,17 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
 String _channelIdForType(String type) {
   if (type == 'OTP') return 'otp_channel';
-  if (type == 'NEW_ROOM') return 'room_channel';
+  if (type == 'NEW_ROOM' || type == 'GAME_INVITE') return 'room_channel';
   if (type.startsWith('WALLET') || type.startsWith('WITHDRAWAL')) return 'wallet_channel';
+  if (type == 'MESSAGE_RECEIVED') return 'message_channel';
   return 'default_channel';
 }
 
 String _channelNameForType(String type) {
   if (type == 'OTP') return 'OTP Notifications';
-  if (type == 'NEW_ROOM') return 'Game Room Alerts';
+  if (type == 'NEW_ROOM' || type == 'GAME_INVITE') return 'Game Room Alerts';
   if (type.startsWith('WALLET') || type.startsWith('WITHDRAWAL')) return 'Wallet & Payments';
+  if (type == 'MESSAGE_RECEIVED') return 'Direct Messages';
   return 'General Notifications';
 }
 
@@ -143,6 +145,12 @@ class FcmService {
       importance: Importance.high,
       enableVibration: true, playSound: true,
     ));
+    await androidPlugin?.createNotificationChannel(const AndroidNotificationChannel(
+      'message_channel', 'Direct Messages',
+      description: 'Private messages from friends',
+      importance: Importance.high,
+      enableVibration: true, playSound: true,
+    ));
 
     const initSettings = InitializationSettings(
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
@@ -178,6 +186,22 @@ class FcmService {
         betAmount: data['betAmount'] ?? '0',
         hostName:  data['hostName'],
         bigText:   data['bigText'],
+      );
+      return;
+    }
+
+    if (type == 'MESSAGE_RECEIVED') {
+      _showMessageNotification(
+        senderName: data['senderName'] ?? data['title'] ?? 'New message',
+        text:       data['messageText'] ?? data['body'] ?? '',
+      );
+      return;
+    }
+
+    if (type == 'GAME_INVITE') {
+      _showGameInviteNotification(
+        fromUsername: data['fromUsername'] ?? data['title'] ?? 'A player',
+        roomCode:     data['roomCode'] ?? '',
       );
       return;
     }
@@ -357,6 +381,64 @@ class FcmService {
       );
     } catch (e) {
       debugPrint('[FCM] Error showing generic notification: $e');
+    }
+  }
+
+  Future<void> _showMessageNotification({
+    required String senderName,
+    required String text,
+  }) async {
+    try {
+      await _localNotifications.show(
+        DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        '💬 $senderName',
+        text,
+        const NotificationDetails(
+          android: AndroidNotificationDetails(
+            'message_channel', 'Direct Messages',
+            icon: '@mipmap/ic_launcher',
+            importance: Importance.high,
+            priority: Priority.high,
+            enableVibration: true,
+            playSound: true,
+          ),
+          iOS: DarwinNotificationDetails(
+            sound: 'default',
+            presentAlert: true, presentBadge: true, presentSound: true,
+          ),
+        ),
+      );
+    } catch (e) {
+      debugPrint('[FCM] Error showing message notification: $e');
+    }
+  }
+
+  Future<void> _showGameInviteNotification({
+    required String fromUsername,
+    required String roomCode,
+  }) async {
+    try {
+      await _localNotifications.show(
+        DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        '🎮 $fromUsername invited you!',
+        roomCode.isNotEmpty ? 'Join room $roomCode — tap to play' : 'Tap to join the game',
+        const NotificationDetails(
+          android: AndroidNotificationDetails(
+            'room_channel', 'Game Room Alerts',
+            icon: '@mipmap/ic_launcher',
+            importance: Importance.high,
+            priority: Priority.high,
+            enableVibration: true,
+            playSound: true,
+          ),
+          iOS: DarwinNotificationDetails(
+            sound: 'default',
+            presentAlert: true, presentBadge: true, presentSound: true,
+          ),
+        ),
+      );
+    } catch (e) {
+      debugPrint('[FCM] Error showing game invite notification: $e');
     }
   }
 

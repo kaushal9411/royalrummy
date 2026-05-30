@@ -2,6 +2,28 @@ const { query, getClient } = require('../../config/database');
 const { v4: uuidv4 } = require('uuid');
 const { sendOpenRoomNotification } = require('../notifications/notification.service');
 const { getSettings } = require('../admin/settings.service');
+const { isExcluded, checkSpendLimit } = require('../responsible_gaming/responsible_gaming.service');
+
+// Central responsible-gaming guard — throws 403 if user cannot join/create a paid room
+async function _checkRgGate(userId) {
+  const excluded = await isExcluded(userId);
+  if (excluded) {
+    throw { status: 403, message: 'You are self-excluded from real-money games. Manage in Settings → Responsible Gaming.' };
+  }
+
+  const { rows } = await query('SELECT is_minor FROM users WHERE id = $1', [userId]);
+  if (rows[0]?.is_minor) {
+    throw { status: 403, message: 'Real-money games are restricted for users under 18. Update your age in Settings.' };
+  }
+
+  for (const period of ['daily', 'weekly', 'monthly']) {
+    const { exceeded, limit, used } = await checkSpendLimit(userId, period);
+    if (exceeded) {
+      const label = period.charAt(0).toUpperCase() + period.slice(1);
+      throw { status: 403, message: `${label} spending limit reached (₹${Number(used).toFixed(0)} of ₹${Number(limit).toFixed(0)}). Adjust limits in Settings.` };
+    }
+  }
+}
 
 const VALID_BET_AMOUNTS = [0, 10, 25, 50, 100];
 
@@ -24,6 +46,9 @@ const createRoom = async (hostId, isPrivate = false, betAmount = 0) => {
   const safeBet = VALID_BET_AMOUNTS.includes(Number(betAmount)) ? Number(betAmount) : 0;
 
   if (safeBet > 0) {
+    // Responsible gaming enforcement — self-exclusion, age, spend limits
+    await _checkRgGate(hostId);
+
     const settings = await getSettings();
     const maxBet = parseFloat(settings.max_bet_amount) || 100;
     if (safeBet > maxBet)
@@ -74,9 +99,10 @@ const joinRoom = async (userId, code) => {
   const room = roomResult.rows[0];
   if (room.status !== 'waiting') throw { status: 400, message: 'Room not accepting players' };
 
-  // Wallet check for paid rooms
+  // Responsible gaming + wallet check for paid rooms
   const betAmount = parseFloat(room.bet_amount) || 0;
   if (betAmount > 0) {
+    await _checkRgGate(userId);
     const balance = await _getUserBalance(userId);
     if (balance < betAmount) throw { status: 400, message: `Insufficient balance. You need ₹${betAmount} to join this room` };
   }

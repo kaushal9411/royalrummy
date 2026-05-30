@@ -1,6 +1,4 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 import '../../../../core/services/socket_service.dart';
 import '../../../../core/services/storage_service.dart';
 import '../../../../core/theme/app_theme.dart';
@@ -28,37 +26,10 @@ class _DmScreenState extends State<DmScreen> {
   @override
   void initState() {
     super.initState();
-    _myId = _decodeUserId();
+    // Read userId from local storage — set on login, always reliable
+    _myId = StorageService.getUser()?['id'] as String?;
     _load();
     SocketService().on('private_message', _onMessage);
-  }
-
-  String? _decodeUserId() {
-    final token = StorageService.getToken();
-    if (token == null) return null;
-    try {
-      final parts = token.split('.');
-      if (parts.length < 2) return null;
-      final payload = String.fromCharCodes(
-        base64Url.decode(base64Url.normalize(parts[1])));
-      final Map<String, dynamic> json = _parseJson(payload);
-      return json['userId'] as String?;
-    } catch (_) { return null; }
-  }
-
-  Map<String, dynamic> _parseJson(String s) {
-    try {
-      final decoded = jsonDecode(s);
-      if (decoded is Map<String, dynamic>) return decoded;
-    } catch (_) {}
-    // Fallback naive parser
-    final map = <String, dynamic>{};
-    final trimmed = s.trim().replaceAll('{', '').replaceAll('}', '').replaceAll('"', '');
-    for (final part in trimmed.split(',')) {
-      final kv = part.trim().split(':');
-      if (kv.length >= 2) map[kv[0].trim()] = kv.sublist(1).join(':').trim();
-    }
-    return map;
   }
 
   @override
@@ -84,12 +55,13 @@ class _DmScreenState extends State<DmScreen> {
   void _onMessage(dynamic data) {
     if (!mounted) return;
     final msg = Map<String, dynamic>.from(data);
-    final senderId = msg['sender_id'] as String?;
+    final senderId   = msg['sender_id']   as String?;
     final receiverId = msg['receiver_id'] as String?;
-    if ((senderId == widget.userId && receiverId == _myId) ||
-        (senderId == _myId && receiverId == widget.userId)) {
+    // Only add messages FROM the other user — own messages are already added
+    // optimistically in _send(), so we skip echoes (senderId == _myId)
+    if (senderId == widget.userId && receiverId == _myId) {
       setState(() => _messages.add(msg));
-      if (senderId == widget.userId) _repo.markRead(widget.userId);
+      _repo.markRead(widget.userId);
       _scrollToBottom();
     }
   }
@@ -143,7 +115,7 @@ class _DmScreenState extends State<DmScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, color: AppColors.textSecondary),
-          onPressed: () => context.go('/social'),
+          onPressed: () => Navigator.of(context).pop(),
         ),
         title: Row(
           children: [

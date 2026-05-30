@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { getUserDetail, approveKyc, rejectKyc, banUser, unbanUser, type AdminUserDetail } from '../../../lib/api';
+import { getUserDetail, approveKyc, rejectKyc, banUser, unbanUser, liftSelfExclusion, type AdminUserDetail } from '../../../lib/api';
 import { formatDate } from '../../../lib/utils';
 
 function InfoRow({ label, value, mono = false }: { label: string; value: React.ReactNode; mono?: boolean }) {
@@ -43,6 +43,7 @@ export default function UserDetailPage() {
   const [toast,   setToast]   = useState<{ msg: string; ok: boolean } | null>(null);
   const [rejectRemark, setRejectRemark] = useState('');
   const [showReject,   setShowReject]   = useState(false);
+  const [showLiftModal, setShowLiftModal] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const showToast = (msg: string, ok = true) => {
@@ -123,6 +124,75 @@ export default function UserDetailPage() {
         <div className={`fixed top-5 right-5 z-50 flex items-center gap-2 px-4 py-3 rounded-xl border text-sm font-medium shadow-xl
                          ${toast.ok ? 'bg-success/10 border-success/30 text-success-light' : 'bg-danger/10 border-danger/30 text-danger-light'}`}>
           <span>{toast.ok ? '✓' : '✕'}</span> {toast.msg}
+        </div>
+      )}
+
+      {/* ── Lift Self-Exclusion modal ────────────────────────────────────────── */}
+      {showLiftModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+             style={{ background: 'rgba(0,0,0,0.78)', backdropFilter: 'blur(6px)' }}>
+          <div className="w-full max-w-sm rounded-2xl border overflow-hidden"
+               style={{ background: '#0F1420', borderColor: 'rgba(234,179,8,0.3)' }}>
+
+            {/* Header */}
+            <div className="px-6 pt-6 pb-4 flex items-start gap-4"
+                 style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+              <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 text-xl"
+                   style={{ background: 'rgba(234,179,8,0.12)', border: '1px solid rgba(234,179,8,0.3)' }}>
+                ↩
+              </div>
+              <div>
+                <h3 className="text-white font-bold text-base">Lift Self-Exclusion</h3>
+                <p className="text-gray-500 text-xs mt-0.5">Admin override — use only on user request</p>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="px-6 py-5">
+              <p className="text-gray-300 text-sm mb-3">
+                You are about to lift the self-exclusion for{' '}
+                <span className="text-white font-semibold">{user.username}</span>.
+              </p>
+              <div className="flex items-start gap-2 px-3 py-2.5 rounded-xl mb-4"
+                   style={{ background: 'rgba(234,179,8,0.07)', border: '1px solid rgba(234,179,8,0.2)' }}>
+                <span className="text-yellow-400 text-sm mt-0.5">⚠</span>
+                <p className="text-yellow-400 text-xs leading-relaxed">
+                  This will immediately restore full access to real-money game rooms.
+                  Only do this if the user has explicitly contacted support and requested it.
+                </p>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowLiftModal(false)}
+                  className="flex-1 px-4 py-2.5 rounded-xl border border-dark-border text-gray-400
+                             text-sm hover:bg-dark-border/50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  disabled={busy}
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      await liftSelfExclusion(user.id);
+                      setShowLiftModal(false);
+                      showToast(`Self-exclusion lifted for ${user.username}`);
+                      await load();
+                    } catch {
+                      showToast('Failed to lift exclusion', false);
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                  className="flex-1 px-4 py-2.5 rounded-xl text-sm font-semibold
+                             text-white disabled:opacity-40 transition-all"
+                  style={{ background: 'linear-gradient(135deg,#CA8A04,#92400E)', boxShadow: '0 4px 12px rgba(202,138,4,0.3)' }}
+                >
+                  {busy ? 'Lifting…' : '↩ Confirm Lift'}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -297,6 +367,21 @@ export default function UserDetailPage() {
               } />
               {user.responsible_gaming.self_excluded && user.responsible_gaming.exclusion_until && (
                 <InfoRow label="Excluded Until" value={formatDate(user.responsible_gaming.exclusion_until)} />
+              )}
+              {user.responsible_gaming.self_excluded && (
+                <div className="mt-4 pt-4 border-t border-dark-border">
+                  <p className="text-gray-500 text-xs mb-3">
+                    The user set this self-exclusion themselves. You can lift it on their behalf if they request it via support.
+                  </p>
+                  <button
+                    onClick={() => setShowLiftModal(true)}
+                    disabled={busy}
+                    className="px-4 py-2 rounded-xl text-sm font-semibold border border-yellow-500/40
+                               text-yellow-400 hover:bg-yellow-500/10 transition-colors disabled:opacity-40"
+                  >
+                    ↩ Lift Self-Exclusion
+                  </button>
+                </div>
               )}
             </>
           )}

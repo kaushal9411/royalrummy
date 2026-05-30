@@ -108,6 +108,10 @@ export interface KycSubmission {
   admin_remark: string | null; submitted_at: string; reviewed_at: string | null;
 }
 
+export const liftSelfExclusion = async (userId: string): Promise<void> => {
+  await api.post(`/admin/users/${userId}/lift-exclusion`);
+};
+
 export const getUserDetail = async (userId: string): Promise<AdminUserDetail> => {
   const res = await api.get(`/admin/users/${userId}/detail`);
   return res.data;

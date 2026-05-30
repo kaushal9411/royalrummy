@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
+import '../../../../core/services/api_service.dart';
 import '../../../../core/services/app_settings_service.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../auth/presentation/bloc/auth_bloc.dart';
@@ -20,6 +21,7 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
   final _codeCtl = TextEditingController();
   bool _loading = false;
   List<Map<String, dynamic>> _publicRooms = [];
+  Map<String, dynamic>? _compliance;
 
   late final AnimationController _enterCtrl;
   late final AnimationController _pulseCtrl;
@@ -35,12 +37,32 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
           ..repeat(reverse: true);
     _fadeIn = CurvedAnimation(parent: _enterCtrl, curve: Curves.easeOut);
     _loadPublicRooms();
+    _loadCompliance();
     Future.delayed(const Duration(milliseconds: 80), () {
       if (mounted) _enterCtrl.forward();
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) context.read<PaymentBloc>().add(const FetchWalletBalanceEvent());
     });
+  }
+
+  Future<void> _loadCompliance() async {
+    try {
+      final res = await ApiService().get('/users/me/compliance');
+      if (mounted) setState(() => _compliance = Map<String, dynamic>.from(res.data as Map));
+    } catch (_) {}
+  }
+
+  // Returns true if user can join/create paid rooms; shows snackbar and returns false if not
+  bool _checkComplianceForPaidRoom() {
+    final c = _compliance;
+    if (c == null) return true; // not loaded yet — let backend enforce
+    if (c['can_play_paid'] == false) {
+      final reason = c['restriction_reason'] as String? ?? 'Real-money games restricted';
+      _showError(reason);
+      return false;
+    }
+    return true;
   }
 
   @override
@@ -67,6 +89,8 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
       builder: (_) => _BetPickerSheet(
         onPicked: (betAmount) {
           Navigator.pop(context);
+          // Guard paid rooms against compliance restrictions
+          if (betAmount > 0 && !_checkComplianceForPaidRoom()) return;
           _createRoom(isPrivate: isPrivate, betAmount: betAmount);
         },
       ),
@@ -224,6 +248,15 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
                   children: [
                     _WelcomeBanner(
                         username: username, level: level, coins: coins, xp: xp),
+                    if (_compliance != null) ...[
+                      const SizedBox(height: 12),
+                      _ComplianceBanners(
+                        compliance: _compliance!,
+                        onAgeVerify: () => context.push('/age-verification').then((_) => _loadCompliance()),
+                        onKyc: () => context.push('/kyc').then((_) => _loadCompliance()),
+                        onRgSettings: () => context.push('/responsible-gaming').then((_) => _loadCompliance()),
+                      ),
+                    ],
                     const SizedBox(height: 24),
                     const _SectionLabel(
                         title: 'Quick Play', icon: Icons.flash_on_rounded),
@@ -374,6 +407,169 @@ class _LobbyBg extends StatelessWidget {
           ]);
         },
       );
+}
+
+// ── Compliance banners ───────────────────────────────────────────────────────
+class _ComplianceBanners extends StatelessWidget {
+  final Map<String, dynamic> compliance;
+  final VoidCallback onAgeVerify;
+  final VoidCallback onKyc;
+  final VoidCallback onRgSettings;
+
+  const _ComplianceBanners({
+    required this.compliance,
+    required this.onAgeVerify,
+    required this.onKyc,
+    required this.onRgSettings,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final banners = <Widget>[];
+
+    // ── Under-18 block ────────────────────────────────────────────────────
+    if (compliance['is_minor'] == true) {
+      banners.add(_Banner(
+        icon: '🔞',
+        color: AppColors.danger,
+        title: 'Real-Money Games Restricted',
+        body: 'Your age (${compliance['age']}y) is below 18. You can only play free rooms.',
+        buttonLabel: null,
+      ));
+    }
+    // ── Age not verified ──────────────────────────────────────────────────
+    else if (compliance['age_verified'] == false) {
+      banners.add(_Banner(
+        icon: '🎂',
+        color: AppColors.trump,
+        title: 'Age Verification Required',
+        body: 'Please verify your age to play real-money rooms.',
+        buttonLabel: 'Verify Age',
+        onButton: onAgeVerify,
+      ));
+    }
+
+    // ── Self-excluded ─────────────────────────────────────────────────────
+    if (compliance['self_excluded'] == true) {
+      final until = compliance['exclusion_until'] as String?;
+      String untilStr = '';
+      if (until != null) {
+        try {
+          final dt = DateTime.parse(until).toLocal();
+          untilStr = ' until ${dt.day}/${dt.month}/${dt.year}';
+        } catch (_) {}
+      }
+      banners.add(_Banner(
+        icon: '🚫',
+        color: AppColors.danger,
+        title: 'Self-Excluded',
+        body: 'You have excluded yourself from real-money games$untilStr. Free rooms are still available.',
+        buttonLabel: 'Manage',
+        onButton: onRgSettings,
+      ));
+    }
+    // ── Spend limit exceeded ──────────────────────────────────────────────
+    else if (compliance['can_play_paid'] == false && compliance['is_minor'] != true) {
+      final reason = compliance['restriction_reason'] as String? ?? 'Spending limit reached';
+      banners.add(_Banner(
+        icon: '📊',
+        color: const Color(0xFFFF9800),
+        title: 'Spending Limit Reached',
+        body: '$reason. You can still play free rooms.',
+        buttonLabel: 'Adjust Limits',
+        onButton: onRgSettings,
+      ));
+    }
+
+    // ── KYC not submitted ─────────────────────────────────────────────────
+    final kycStatus = compliance['kyc_status'] as String? ?? 'not_submitted';
+    if (kycStatus == 'not_submitted') {
+      banners.add(_Banner(
+        icon: '🪪',
+        color: AppColors.accent,
+        title: 'KYC Not Submitted',
+        body: 'Submit your PAN card and selfie before your first withdrawal.',
+        buttonLabel: 'Apply KYC',
+        onButton: onKyc,
+      ));
+    } else if (kycStatus == 'rejected') {
+      banners.add(_Banner(
+        icon: '🪪',
+        color: AppColors.danger,
+        title: 'KYC Rejected',
+        body: 'Your KYC documents were rejected. Please resubmit.',
+        buttonLabel: 'Resubmit',
+        onButton: onKyc,
+      ));
+    }
+
+    if (banners.isEmpty) return const SizedBox.shrink();
+
+    return Column(
+      children: banners
+          .map((b) => Padding(padding: const EdgeInsets.only(bottom: 8), child: b))
+          .toList(),
+    );
+  }
+}
+
+class _Banner extends StatelessWidget {
+  final String icon;
+  final Color color;
+  final String title;
+  final String body;
+  final String? buttonLabel;
+  final VoidCallback? onButton;
+
+  const _Banner({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.body,
+    this.buttonLabel,
+    this.onButton,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        color: color.withValues(alpha: 0.08),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(icon, style: const TextStyle(fontSize: 20)),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(title,
+                style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 13)),
+            const SizedBox(height: 3),
+            Text(body,
+                style: const TextStyle(color: AppColors.textSecondary, fontSize: 12, height: 1.4)),
+            if (buttonLabel != null && onButton != null) ...[
+              const SizedBox(height: 8),
+              GestureDetector(
+                onTap: onButton,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: color.withValues(alpha: 0.4)),
+                  ),
+                  child: Text(buttonLabel!,
+                      style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ],
+          ]),
+        ),
+      ]),
+    );
+  }
 }
 
 // ── Welcome banner ──────────────────────────────────────────────────────────

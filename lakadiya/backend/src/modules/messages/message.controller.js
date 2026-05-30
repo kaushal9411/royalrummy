@@ -43,13 +43,12 @@ const sendMessage = async (req, res, next) => {
         req.user.username,
         msg.text.substring(0, 100),
         {
-          type: 'private_message',
-          senderId: req.user.id,
-          senderName: req.user.username,
+          type:        'MESSAGE_RECEIVED',
+          senderId:    req.user.id,
+          senderName:  req.user.username,
           messageText: msg.text,
-          action: 'MESSAGE_RECEIVED',
         },
-        'message_channel'
+        'default_channel'
       );
     } catch (notifErr) {
       console.log('Notification send error:', notifErr.message);
