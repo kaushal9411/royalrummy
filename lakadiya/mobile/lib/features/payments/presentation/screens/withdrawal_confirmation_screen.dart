@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/services/app_settings_service.dart';
 import '../bloc/payment_bloc.dart';
 
 /// Call this instead of directly dispatching RequestWithdrawalEvent.
@@ -47,7 +48,12 @@ class _WithdrawalConfirmCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final remaining = balance - amount;
+    final s           = AppSettingsService.instance.current;
+    final feePct      = s.platformFeePct;
+    final platformFee = double.parse((amount * feePct / 100).toStringAsFixed(2));
+    final netAmount   = amount - platformFee;
+    final remaining   = balance - amount;
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 20),
       decoration: BoxDecoration(
@@ -105,29 +111,51 @@ class _WithdrawalConfirmCard extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.all(24),
           child: Column(children: [
-            // Amount
+            // Big "you receive" number
             ShaderMask(
               shaderCallback: (b) => const LinearGradient(
                 colors: [Color(0xFF00B0FF), Color(0xFF0088CC)],
               ).createShader(b),
-              child: Text('₹${amount.toStringAsFixed(0)}',
-                  style: const TextStyle(color: Colors.white, fontSize: 48,
+              child: Text(netAmount.toStringAsFixed(0),
+                  style: const TextStyle(color: Colors.white, fontSize: 52,
                       fontWeight: FontWeight.w900, letterSpacing: -1, height: 1)),
             ),
             const SizedBox(height: 6),
-            const Text('will be withdrawn from your wallet',
+            const Text('you will receive',
                 style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
             const SizedBox(height: 20),
 
-            // Summary rows
-            _SummaryRow('Current Balance', '₹${balance.toStringAsFixed(2)}', Colors.white),
-            const SizedBox(height: 8),
-            _SummaryRow('Withdrawal Amount', '−₹${amount.toStringAsFixed(2)}', AppColors.danger),
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 8),
-              child: Divider(color: Color(0xFF1E3050)),
+            // Fee breakdown card
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.03),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
+              ),
+              child: Column(children: [
+                _SummaryRow('Withdrawal Request', amount.toStringAsFixed(0), Colors.white),
+                const SizedBox(height: 8),
+                _SummaryRow(
+                  'Platform Fee (${feePct.toStringAsFixed(1)}%)',
+                  '−${platformFee.toStringAsFixed(2)}',
+                  AppColors.danger,
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Divider(color: Color(0xFF1E3050)),
+                ),
+                _SummaryRow('You Will Receive', netAmount.toStringAsFixed(2),
+                    const Color(0xFF00B0FF)),
+              ]),
             ),
-            _SummaryRow('Remaining Balance', '₹${remaining.toStringAsFixed(2)}', AppColors.accent),
+            const SizedBox(height: 12),
+
+            // Wallet impact
+            _SummaryRow('Current Balance', balance.toStringAsFixed(2), Colors.white),
+            const SizedBox(height: 6),
+            _SummaryRow('Remaining Balance', remaining.toStringAsFixed(2), AppColors.accent),
             const SizedBox(height: 16),
 
             // Processing note
@@ -156,8 +184,8 @@ class _WithdrawalConfirmCard extends StatelessWidget {
                   backgroundColor: AppColors.accent,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                 ),
-                child: const Text('Confirm Withdrawal',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                child: Text('Confirm — Receive ${netAmount.toStringAsFixed(0)}',
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
               ),
             ),
             const SizedBox(height: 12),

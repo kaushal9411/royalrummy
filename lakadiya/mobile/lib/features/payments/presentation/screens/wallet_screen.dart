@@ -6,6 +6,7 @@ import '../../../../../core/theme/app_theme.dart';
 import '../../../../../core/utils/auth_guard.dart';
 import '../bloc/payment_bloc.dart';
 import '../../data/models/payment_model.dart';
+import 'transaction_receipt.dart';
 
 class WalletScreen extends StatefulWidget {
   const WalletScreen({super.key});
@@ -290,7 +291,9 @@ class _TransactionTile extends StatelessWidget {
         opacity: v,
         child: Transform.translate(offset: Offset(0, 10 * (1 - v)), child: child),
       ),
-      child: Container(
+      child: GestureDetector(
+        onTap: () => showTransactionReceipt(context, tx),
+        child: Container(
         margin: const EdgeInsets.only(bottom: 8),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
         decoration: BoxDecoration(
@@ -348,6 +351,7 @@ class _TransactionTile extends StatelessWidget {
             ),
           ]),
         ]),
+      ),
       ),
     );
   }

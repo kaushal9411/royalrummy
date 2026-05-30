@@ -132,15 +132,70 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Revenue cards */}
+      {/* Platform Earnings — withdrawal fee is actual profit; gateway fee is Razorpay cost recovery */}
+      <div className="mb-3">
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+          <span className="w-4 h-px bg-emerald-500/40 inline-block" />
+          Platform Earnings
+          <span className="w-4 h-px bg-emerald-500/40 inline-block" />
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="relative rounded-2xl p-4 border overflow-hidden"
+               style={{ background: '#0A1A14', borderColor: '#10B98130', boxShadow: '0 0 24px #10B98118' }}>
+            <div className="absolute inset-0 opacity-5" style={{ background: 'radial-gradient(circle at top right, #10B981, transparent 60%)' }} />
+            <div className="relative flex items-start justify-between">
+              <div>
+                <p className="text-gray-500 text-xs uppercase tracking-wider mb-1">Total Earnings</p>
+                <p className="text-xl font-bold text-emerald-400">
+                  {loading ? '—' : formatCurrency(pstats?.total_platform_fee_earned ?? 0)}
+                </p>
+                <p className="text-gray-600 text-xs mt-1">Withdrawal fee collected</p>
+              </div>
+              <span className="text-2xl">🏦</span>
+            </div>
+          </div>
+
+          <div className="relative rounded-2xl p-4 border overflow-hidden"
+               style={{ background: '#0A1A14', borderColor: '#6366F130', boxShadow: '0 0 24px #6366F118' }}>
+            <div className="absolute inset-0 opacity-5" style={{ background: 'radial-gradient(circle at top right, #6366F1, transparent 60%)' }} />
+            <div className="relative flex items-start justify-between">
+              <div>
+                <p className="text-gray-500 text-xs uppercase tracking-wider mb-1">Today's Earnings</p>
+                <p className="text-xl font-bold text-indigo-400">
+                  {loading ? '—' : formatCurrency(pstats?.today_platform_fee_earned ?? 0)}
+                </p>
+                <p className="text-gray-600 text-xs mt-1">Withdrawal fee today</p>
+              </div>
+              <span className="text-2xl">📈</span>
+            </div>
+          </div>
+
+          <div className="relative rounded-2xl p-4 border overflow-hidden"
+               style={{ background: '#0F1420', borderColor: '#F59E0B20', boxShadow: '0 0 20px #F59E0B12' }}>
+            <div className="absolute inset-0 opacity-5" style={{ background: 'radial-gradient(circle at top right, #F59E0B, transparent 60%)' }} />
+            <div className="relative flex items-start justify-between">
+              <div>
+                <p className="text-gray-500 text-xs uppercase tracking-wider mb-1">Gateway Fee Recovered</p>
+                <p className="text-xl font-bold text-amber-400">
+                  {loading ? '—' : formatCurrency(pstats?.total_gateway_fee_earned ?? 0)}
+                </p>
+                <p className="text-gray-600 text-xs mt-1">Razorpay cost recovery</p>
+              </div>
+              <span className="text-2xl">💳</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Deposit & withdrawal overview */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-7">
         {[
-          { label: "Today's Revenue",  value: pstats?.today_revenue  ?? 0, icon: '📅', color: '#10B981', fmt: true },
-          { label: 'Total Revenue',    value: pstats?.total_revenue  ?? 0, icon: '💰', color: '#F59E0B', fmt: true },
+          { label: "Today's Deposits", value: pstats?.today_revenue    ?? 0, icon: '📅', color: '#3B82F6', fmt: true },
+          { label: 'Total Deposits',   value: pstats?.total_revenue    ?? 0, icon: '💰', color: '#64748B', fmt: true },
           { label: 'Pending Withdrawals', value: pstats?.pending_count ?? 0, icon: '⏳', color: '#EF4444', fmt: false },
         ].map(({ label, value, icon, color, fmt: isCurrency }) => (
           <div key={label} className="relative rounded-2xl p-4 border overflow-hidden"
-               style={{ background: '#0F1420', borderColor: `${color}20`, boxShadow: `0 0 20px ${color}15` }}>
+               style={{ background: '#0F1420', borderColor: `${color}20`, boxShadow: `0 0 16px ${color}12` }}>
             <div className="absolute inset-0 opacity-5" style={{ background: `radial-gradient(circle at top right, ${color}, transparent 60%)` }} />
             <div className="relative flex items-center justify-between">
               <div>

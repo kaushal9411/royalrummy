@@ -9,6 +9,7 @@ class AppSettings {
   final double welcomeBonus;
   final double maxBetAmount;
   final double platformFeePct;
+  final double paymentGatewayFeePct;
 
   const AppSettings({
     required this.maintenanceMode,
@@ -18,6 +19,7 @@ class AppSettings {
     required this.welcomeBonus,
     required this.maxBetAmount,
     required this.platformFeePct,
+    required this.paymentGatewayFeePct,
   });
 
   factory AppSettings.defaults() => const AppSettings(
@@ -28,6 +30,7 @@ class AppSettings {
     welcomeBonus: 50,
     maxBetAmount: 100,
     platformFeePct: 0,
+    paymentGatewayFeePct: 2,
   );
 }
 
@@ -55,8 +58,9 @@ class AppSettingsService {
       minWithdrawal:       _parseDouble(data['min_withdrawal'],      s.minWithdrawal),
       maxWithdrawal:       _parseDouble(data['max_withdrawal'],      s.maxWithdrawal),
       welcomeBonus:        _parseDouble(data['welcome_bonus'],       s.welcomeBonus),
-      maxBetAmount:        _parseDouble(data['max_bet_amount'],      s.maxBetAmount),
-      platformFeePct:      _parseDouble(data['platform_fee_pct'],   s.platformFeePct),
+      maxBetAmount:           _parseDouble(data['max_bet_amount'],           s.maxBetAmount),
+      platformFeePct:         _parseDouble(data['platform_fee_pct'],        s.platformFeePct),
+      paymentGatewayFeePct:   _parseDouble(data['payment_gateway_fee_pct'], s.paymentGatewayFeePct),
     );
     debugPrint('[AppSettings] Updated: maintenance=${_notifier.value.maintenanceMode}, maxBet=${_notifier.value.maxBetAmount}');
   }

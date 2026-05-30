@@ -4,10 +4,27 @@ const { query, getClient } = require('../../config/database');
 const logger = require('../../config/logger');
 const { getSettings } = require('../admin/settings.service');
 
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET,
-});
+// ── Lazy Razorpay credentials (DB first, env fallback) ────────────────────────
+let _rzpInstance = null;
+let _rzpSecret   = null;
+let _rzpCredsAt  = 0;
+const RZP_CREDS_TTL = 5 * 60 * 1000; // refresh every 5 min in case admin changes keys
+
+const _getRazorpay = async () => {
+  if (_rzpInstance && Date.now() - _rzpCredsAt < RZP_CREDS_TTL) {
+    return { instance: _rzpInstance, secret: _rzpSecret };
+  }
+  const { getCredential } = require('../credentials/credentials.service');
+  const keyId  = (await getCredential('razorpay_key_id'))     || process.env.RAZORPAY_KEY_ID;
+  const secret = (await getCredential('razorpay_key_secret')) || process.env.RAZORPAY_KEY_SECRET;
+  if (!keyId || !secret) {
+    throw { status: 500, message: 'Razorpay credentials not configured. Add razorpay_key_id and razorpay_key_secret in Admin → Credentials.' };
+  }
+  _rzpInstance = new Razorpay({ key_id: keyId, key_secret: secret });
+  _rzpSecret   = secret;
+  _rzpCredsAt  = Date.now();
+  return { instance: _rzpInstance, secret };
+};
 
 // Conversion: 1 INR = 1 coin
 const COINS_PER_RUPEE = 1;
@@ -18,50 +35,67 @@ const createPaymentOrder = async (userId, amount, type = 'add') => {
     
     if (amount <= 0) throw { status: 400, message: 'Invalid amount' };
     
+    // Gateway fee: user pays base + fee; coins credited = base only
+    const settings = await getSettings();
+    const gatewayFeePct = parseFloat(settings.payment_gateway_fee_pct) || 0;
+    const gatewayFee    = parseFloat((amount * gatewayFeePct / 100).toFixed(2));
+    const totalCharge   = parseFloat((amount + gatewayFee).toFixed(2));
     const coins = Math.floor(amount * COINS_PER_RUPEE);
-    
+
     // Receipt must be max 40 characters for Razorpay
     const timestamp = Date.now().toString().slice(-10);
     const randomId = Math.random().toString(36).substring(2, 8).toUpperCase();
     const receipt = `ORD${timestamp}${randomId}`.substring(0, 40);
-    
+
     const options = {
-      amount: Math.round(amount * 100),
+      amount: Math.round(totalCharge * 100), // paise — Razorpay charges totalCharge
       currency: 'INR',
-      receipt: receipt,
-      notes: {
-        userId,
-        type,
-        coins,
-      },
+      receipt,
+      notes: { userId, type, coins, baseAmount: amount, gatewayFee, gatewayFeePct },
     };
 
     console.log(`[Payment] Razorpay options:`, options);
-    
-    const order = await razorpay.orders.create(options);
+
+    const { instance: rzp } = await _getRazorpay();
+    const order = await rzp.orders.create(options);
     console.log(`[Payment] Order created: ${order.id}`);
-    
+
     const result = await query(
-      `INSERT INTO payment_transactions 
+      `INSERT INTO payment_transactions
        (user_id, razorpay_order_id, amount, coins, type, status, metadata)
        VALUES ($1, $2, $3, $4, $5, 'pending', $6)
        RETURNING id, razorpay_order_id, amount, coins, type, status, created_at`,
-      [userId, order.id, amount, coins, type, JSON.stringify({ orderId: order.id })]
+      [userId, order.id, totalCharge, coins, type,
+       JSON.stringify({ orderId: order.id, baseAmount: amount, gatewayFee, gatewayFeePct })]
     );
 
     console.log(`[Payment] Transaction saved: ${result.rows[0].id}`);
 
     return {
-      orderId: order.id,
-      amount: order.amount,
-      currency: order.currency,
+      orderId:       order.id,
+      amount:        order.amount,   // paise (Razorpay SDK uses this directly)
+      currency:      order.currency,
       transactionId: result.rows[0].id,
       coins,
+      baseAmount:    amount,
+      gatewayFee,
+      gatewayFeePct,
+      totalCharge,
     };
   } catch (err) {
-    console.error(`[Payment Error] ${err.message}`, err);
-    logger.error(`Failed to create payment order: ${err.message}`, err);
-    throw { status: 500, message: 'Failed to create payment order', error: err.message };
+    const errMsg = err.message || err.error?.description || JSON.stringify(err);
+    // Razorpay 401 → clear credential cache so a re-attempt picks up any admin fix immediately
+    if (err.statusCode === 401) {
+      _rzpInstance = null;
+      _rzpCredsAt  = 0;
+      const msg = 'Razorpay authentication failed — update razorpay_key_id and razorpay_key_secret in Admin → Credentials';
+      console.error(`[Payment Error] ${msg}`);
+      logger.error(msg);
+      throw { status: 500, message: msg };
+    }
+    console.error(`[Payment Error] ${errMsg}`, err);
+    logger.error(`Failed to create payment order: ${errMsg}`, err);
+    throw { status: 500, message: 'Failed to create payment order', error: errMsg };
   }
 };
 
@@ -69,9 +103,11 @@ const verifyPayment = async (userId, paymentId, orderId, signature) => {
   try {
     console.log(`[Payment] Verifying payment - User: ${userId}, PaymentID: ${paymentId}, OrderID: ${orderId}`);
     
+    const { instance: rzp, secret: rzpSecret } = await _getRazorpay();
+
     const text = `${orderId}|${paymentId}`;
     const expectedSignature = crypto
-      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .createHmac('sha256', rzpSecret)
       .update(text)
       .digest('hex');
 
@@ -81,7 +117,7 @@ const verifyPayment = async (userId, paymentId, orderId, signature) => {
 
     console.log(`[Payment] Signature verified`);
 
-    const payment = await razorpay.payments.fetch(paymentId);
+    const payment = await rzp.payments.fetch(paymentId);
 
     if (payment.status !== 'captured') {
       throw { status: 400, message: 'Payment not captured' };
@@ -131,9 +167,14 @@ const verifyPayment = async (userId, paymentId, orderId, signature) => {
       message: 'Payment verified successfully',
     };
   } catch (err) {
-    console.error(`[Payment Verify Error] ${err.message}`, err);
-    logger.error(`Payment verification failed: ${err.message}`, err);
-    
+    const errMsg = err.message || err.error?.description || JSON.stringify(err);
+    if (err.statusCode === 401) {
+      _rzpInstance = null;
+      _rzpCredsAt  = 0;
+    }
+    console.error(`[Payment Verify Error] ${errMsg}`, err);
+    logger.error(`Payment verification failed: ${errMsg}`, err);
+
     try {
       await query(
         `UPDATE payment_transactions 
@@ -145,7 +186,7 @@ const verifyPayment = async (userId, paymentId, orderId, signature) => {
       console.error(`[Payment] Failed to mark transaction as failed:`, e);
     }
 
-    throw { status: 400, message: err.message || 'Payment verification failed', error: err.message };
+    throw { status: 400, message: errMsg || 'Payment verification failed', error: errMsg };
   }
 };
 
@@ -206,7 +247,8 @@ const getTransactionHistory = async (userId, limit = 20, offset = 0) => {
     console.log(`[Payment] Getting transaction history - User: ${userId}, Limit: ${limit}, Offset: ${offset}`);
     
     const result = await query(
-      `SELECT id, amount, coins, type, status, created_at, updated_at
+      `SELECT id, amount, coins, type, status, created_at, updated_at,
+              metadata, razorpay_order_id, razorpay_payment_id
        FROM payment_transactions
        WHERE user_id = $1 AND type = 'add'
        ORDER BY created_at DESC
@@ -227,7 +269,7 @@ const getWithdrawalRequests = async (userId, limit = 20, offset = 0) => {
     console.log(`[Payment] Getting withdrawal requests - User: ${userId}, Limit: ${limit}, Offset: ${offset}`);
     
     const result = await query(
-      `SELECT id, amount, coins, type, status, description, created_at, updated_at
+      `SELECT id, amount, coins, type, status, description, created_at, updated_at, metadata
        FROM payment_transactions
        WHERE user_id = $1 AND type = 'withdraw'
        ORDER BY created_at DESC
@@ -248,14 +290,16 @@ const requestWithdrawal = async (userId, amount) => {
     if (amount <= 0) throw { status: 400, message: 'Invalid withdrawal amount' };
 
     const settings = await getSettings();
-    const minW = parseFloat(settings.min_withdrawal) || 100;
-    const maxW = parseFloat(settings.max_withdrawal) || 10000;
-    if (amount < minW)
-      throw { status: 400, message: `Minimum withdrawal amount is ₹${minW}` };
-    if (amount > maxW)
-      throw { status: 400, message: `Maximum withdrawal amount is ₹${maxW}` };
+    const minW           = parseFloat(settings.min_withdrawal) || 100;
+    const maxW           = parseFloat(settings.max_withdrawal) || 10000;
+    const platformFeePct = parseFloat(settings.platform_fee_pct) || 0;
+    if (amount < minW) throw { status: 400, message: `Minimum withdrawal amount is ${minW}` };
+    if (amount > maxW) throw { status: 400, message: `Maximum withdrawal amount is ${maxW}` };
 
-    console.log(`[Payment] Requesting withdrawal - User: ${userId}, Amount: ${amount}`);
+    const platformFee = parseFloat((amount * platformFeePct / 100).toFixed(2));
+    const netAmount   = parseFloat((amount - platformFee).toFixed(2));
+
+    console.log(`[Payment] Requesting withdrawal - User: ${userId}, Amount: ${amount}, Fee: ${platformFee}, Net: ${netAmount}`);
 
     const userResult = await query('SELECT coins FROM users WHERE id = $1', [userId]);
     if (!userResult.rows.length) throw { status: 404, message: 'User not found' };
@@ -273,10 +317,11 @@ const requestWithdrawal = async (userId, amount) => {
       await client.query('BEGIN');
       result = await client.query(
         `INSERT INTO payment_transactions
-         (user_id, amount, coins, type, status, description)
-         VALUES ($1, $2, $3, 'withdraw', 'pending', 'Withdrawal request')
+         (user_id, amount, coins, type, status, description, metadata)
+         VALUES ($1, $2, $3, 'withdraw', 'pending', 'Withdrawal request', $4)
          RETURNING id, amount, coins, type, status, created_at`,
-        [userId, amount, coinsRequired]
+        [userId, amount, coinsRequired,
+         JSON.stringify({ platformFee, platformFeePct, netAmount })]
       );
       await client.query(
         `UPDATE users SET coins = GREATEST(coins - $1, 0) WHERE id = $2`,
@@ -292,7 +337,7 @@ const requestWithdrawal = async (userId, amount) => {
 
     console.log(`[Payment] Withdrawal request created: ${result.rows[0].id}`);
 
-    return result.rows[0];
+    return { ...result.rows[0], platformFee, platformFeePct, netAmount };
   } catch (err) {
     console.error(`[Payment Error] requestWithdrawal failed:`, err);
     throw { status: 400, message: err.message || 'Withdrawal request failed', error: err.message };
@@ -306,7 +351,7 @@ const getAllUserTransactions = async (userId, type, limit = 50, offset = 0) => {
     
     let query_text = `
       SELECT pt.id, pt.user_id, pt.amount, pt.coins, pt.type, pt.status, pt.created_at,
-             u.username, u.email
+             u.username, u.email, pt.metadata, pt.razorpay_payment_id
       FROM payment_transactions pt
       JOIN users u ON pt.user_id = u.id
       WHERE pt.type = 'add'
@@ -336,7 +381,7 @@ const getAllWithdrawalRequests = async (status, limit = 50, offset = 0) => {
     
     let query_text = `
       SELECT pt.id, pt.user_id, pt.amount, pt.coins, pt.status, pt.created_at, pt.updated_at,
-             u.username, u.email
+             u.username, u.email, pt.metadata
       FROM payment_transactions pt
       JOIN users u ON pt.user_id = u.id
       WHERE pt.type = 'withdraw'
@@ -472,7 +517,17 @@ const getPaymentStats = async () => {
         COALESCE(SUM(CASE WHEN type = 'bet_deduct' AND status = 'success' THEN amount ELSE 0 END), 0)::float AS total_bet_escrowed,
         COUNT(CASE WHEN type = 'bet_win' AND status = 'success' THEN 1 END)::int AS total_bet_games,
         COALESCE(SUM(CASE WHEN type = 'bet_deduct' AND status = 'success'
-                          AND created_at >= CURRENT_DATE THEN amount ELSE 0 END), 0)::float AS today_bet_volume
+                          AND created_at >= CURRENT_DATE THEN amount ELSE 0 END), 0)::float AS today_bet_volume,
+        -- Gateway fee = actual platform earnings on add-money transactions
+        COALESCE(SUM(CASE WHEN type = 'add' AND status = 'success'
+                          THEN COALESCE((metadata->>'gatewayFee')::numeric, 0) ELSE 0 END), 0)::float AS total_gateway_fee_earned,
+        COALESCE(SUM(CASE WHEN type = 'add' AND status = 'success' AND created_at >= CURRENT_DATE
+                          THEN COALESCE((metadata->>'gatewayFee')::numeric, 0) ELSE 0 END), 0)::float AS today_gateway_fee_earned,
+        -- Platform fee = actual earnings on withdrawal approvals
+        COALESCE(SUM(CASE WHEN type = 'withdraw' AND status = 'success'
+                          THEN COALESCE((metadata->>'platformFee')::numeric, 0) ELSE 0 END), 0)::float AS total_platform_fee_earned,
+        COALESCE(SUM(CASE WHEN type = 'withdraw' AND status = 'success' AND created_at >= CURRENT_DATE
+                          THEN COALESCE((metadata->>'platformFee')::numeric, 0) ELSE 0 END), 0)::float AS today_platform_fee_earned
       FROM payment_transactions
     `);
     return result.rows[0];

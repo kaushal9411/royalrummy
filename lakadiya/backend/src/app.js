@@ -17,6 +17,7 @@ const credentialsRoutes = require('./modules/credentials/credentials.routes');
 const kycRoutes = require('./modules/kyc/kyc.routes');
 const responsibleGamingRoutes = require('./modules/responsible_gaming/responsible_gaming.routes');
 const { getSettings } = require('./modules/admin/settings.service');
+const { autoSeedFromEnv } = require('./modules/credentials/credentials.service');
 const { errorHandler, notFound } = require('./middleware/error.middleware');
 
 const app = express();
@@ -31,6 +32,10 @@ app.use(express.urlencoded({ extended: true }));
 
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200 });
 app.use('/api', limiter);
+
+// Seed Razorpay credentials from env into encrypted DB on first boot
+autoSeedFromEnv('razorpay_key_id',     process.env.RAZORPAY_KEY_ID).catch(() => {});
+autoSeedFromEnv('razorpay_key_secret', process.env.RAZORPAY_KEY_SECRET).catch(() => {});
 
 app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
 
@@ -68,7 +73,8 @@ app.get('/api/settings/public', async (req, res, next) => {
       max_withdrawal:       Number(s.max_withdrawal),
       welcome_bonus:        Number(s.welcome_bonus),
       max_bet_amount:       Number(s.max_bet_amount),
-      platform_fee_pct:     Number(s.platform_fee_pct),
+      platform_fee_pct:          Number(s.platform_fee_pct),
+      payment_gateway_fee_pct:   Number(s.payment_gateway_fee_pct ?? 2),
     });
   } catch (e) { next(e); }
 });

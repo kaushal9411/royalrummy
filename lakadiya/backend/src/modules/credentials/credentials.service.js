@@ -58,7 +58,8 @@ async function getCredential(keyName) {
 }
 
 async function getPublicAppKeys() {
-  const razorpayKey = await getCredential('razorpay_key_id');
+  // DB first, fall back to env so mobile works even before admin stores credentials
+  const razorpayKey = await getCredential('razorpay_key_id') || process.env.RAZORPAY_KEY_ID;
   return { razorpay_key_id: razorpayKey || null };
 }
 
@@ -87,4 +88,18 @@ async function deleteCredential(keyName) {
   return rowCount > 0;
 }
 
-module.exports = { setCredential, getCredential, getPublicAppKeys, listCredentials, deleteCredential };
+// Seed a credential from env into DB if it isn't already stored there.
+// Called once on server startup so env vars bootstrap the DB on first run.
+// When env var is present it always wins — keeps DB in sync with .env on restart.
+// When env var is absent, DB holds whatever the admin last set via the panel.
+async function autoSeedFromEnv(keyName, envValue) {
+  if (!envValue) return;
+  await ensureTable();
+  const existing = await getCredential(keyName);
+  if (existing !== envValue) {
+    await setCredential(keyName, envValue);
+    console.log(`[Credentials] ${existing ? 'Updated' : 'Seeded'} '${keyName}' from env into DB`);
+  }
+}
+
+module.exports = { setCredential, getCredential, getPublicAppKeys, listCredentials, deleteCredential, autoSeedFromEnv };

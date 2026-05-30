@@ -116,10 +116,24 @@ const getAnalytics = async () => {
      ORDER BY ps.matches_won DESC LIMIT 10`
   );
 
+  const feesByDay = await query(
+    `SELECT
+       DATE(created_at) AS date,
+       COALESCE(SUM(CASE WHEN type = 'add'
+                    THEN COALESCE((metadata->>'gatewayFee')::numeric, 0) ELSE 0 END), 0)::float AS gateway_fee,
+       COALESCE(SUM(CASE WHEN type = 'withdraw'
+                    THEN COALESCE((metadata->>'platformFee')::numeric, 0) ELSE 0 END), 0)::float AS platform_fee
+     FROM payment_transactions
+     WHERE status = 'success' AND created_at >= NOW() - INTERVAL '7 days'
+     GROUP BY DATE(created_at)
+     ORDER BY date`
+  );
+
   return {
-    matchesByDay:    last7days.rows,
+    matchesByDay:       last7days.rows,
     registrationsByDay: registrations.rows,
-    topPlayers:      topPlayers.rows,
+    topPlayers:         topPlayers.rows,
+    feesByDay:          feesByDay.rows,
   };
 };
 

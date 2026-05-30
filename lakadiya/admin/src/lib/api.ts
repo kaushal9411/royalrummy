@@ -146,6 +146,7 @@ export interface Analytics {
   matchesByDay:       { date: string; matches: number }[];
   registrationsByDay: { date: string; users: number }[];
   topPlayers:         { username: string; matches_won: number; total_score: number }[];
+  feesByDay:          { date: string; gateway_fee: number; platform_fee: number }[];
 }
 
 // ─── Extended dashboard ───────────────────────────────────────────────────────
@@ -222,13 +223,14 @@ export const getNotificationHistory = async (): Promise<NotificationLog[]> => {
 // ─── Settings types & calls ───────────────────────────────────────────────────
 
 export interface AdminSettings {
-  maintenance_mode:     boolean;
-  registration_enabled: boolean;
-  min_withdrawal:       number;
-  max_withdrawal:       number;
-  welcome_bonus:        number;
-  max_bet_amount:       number;
-  platform_fee_pct:     number;
+  maintenance_mode:          boolean;
+  registration_enabled:      boolean;
+  min_withdrawal:            number;
+  max_withdrawal:            number;
+  welcome_bonus:             number;
+  max_bet_amount:            number;
+  platform_fee_pct:          number;
+  payment_gateway_fee_pct:   number;
 }
 
 export const getAdminSettings = async (): Promise<AdminSettings> => {
@@ -244,16 +246,20 @@ export const updateAdminSettings = async (data: Partial<AdminSettings>): Promise
 // ─── Payment types & calls ────────────────────────────────────────────────────
 
 export interface PaymentStats {
-  total_revenue:      number;
-  total_withdrawn:    number;
-  pending_amount:     number;
-  pending_count:      number;
-  total_add_count:    number;
-  today_revenue:      number;
-  total_bet_payouts:  number;
-  total_bet_escrowed: number;
-  total_bet_games:    number;
-  today_bet_volume:   number;
+  total_revenue:             number;
+  total_withdrawn:           number;
+  pending_amount:            number;
+  pending_count:             number;
+  total_add_count:           number;
+  today_revenue:             number;
+  total_bet_payouts:         number;
+  total_bet_escrowed:        number;
+  total_bet_games:           number;
+  today_bet_volume:          number;
+  total_gateway_fee_earned:  number;
+  today_gateway_fee_earned:  number;
+  total_platform_fee_earned: number;
+  today_platform_fee_earned: number;
 }
 
 export interface GameBet {
@@ -271,10 +277,21 @@ export interface GameBet {
   room_bet_amount: number;
 }
 
+export interface TxMetadata {
+  baseAmount?:    number;
+  gatewayFee?:    number;
+  gatewayFeePct?: number;
+  platformFee?:   number;
+  platformFeePct?: number;
+  netAmount?:     number;
+}
+
 export interface AdminTransaction {
   id: string; user_id: string; username: string; email: string;
   amount: number; coins: number; type: string; status: string;
   created_at: string; updated_at: string;
+  metadata?: TxMetadata | null;
+  razorpay_payment_id?: string | null;
 }
 
 export const getPaymentStats = async (): Promise<PaymentStats> => {

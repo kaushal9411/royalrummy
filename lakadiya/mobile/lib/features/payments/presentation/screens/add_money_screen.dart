@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:razorpay_flutter/razorpay_flutter.dart';
 import '../../../../../core/services/credentials_service.dart';
+import '../../../../../core/services/app_settings_service.dart';
 import '../../../../../core/theme/app_theme.dart';
 import '../bloc/payment_bloc.dart';
 import '../../data/models/payment_model.dart';
@@ -143,7 +144,7 @@ class _AddMoneyScreenState extends State<AddMoneyScreen>
                   _openRazorpay(state.order);
                 } else if (state is PaymentVerified) {
                   _snack(
-                    '₹${state.verification.amount} added! (+${state.verification.coins} coins)',
+                    '${state.verification.amount} added! (+${state.verification.coins} coins)',
                     AppColors.primary,
                   );
                   _amountCtl.clear();
@@ -177,7 +178,8 @@ class _AddMoneyScreenState extends State<AddMoneyScreen>
                               _buildSectionLabel(Icons.edit_rounded, 'Custom Amount'),
                               const SizedBox(height: 12),
                               _buildAmountField(loading),
-                              const SizedBox(height: 20),
+                              _buildFeePreview(),
+                              const SizedBox(height: 14),
                               _buildPayButton(loading),
                             ],
                           ),
@@ -240,10 +242,23 @@ class _AddMoneyScreenState extends State<AddMoneyScreen>
         child: const Icon(Icons.info_outline_rounded, color: AppColors.primary, size: 16),
       ),
       const SizedBox(width: 12),
-      const Expanded(
-        child: Text(
-          '₹1 = 1 coin  •  Powered by Razorpay  •  Secure & Instant',
-          style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Builder(builder: (_) {
+              final feePct = AppSettingsService.instance.current.paymentGatewayFeePct;
+              return Text(
+                'Gateway Fee: ${feePct.toStringAsFixed(1)}%  •  Powered by Razorpay',
+                style: const TextStyle(color: AppColors.textSecondary, fontSize: 11.5),
+              );
+            }),
+            const SizedBox(height: 3),
+            const Text(
+              'Secure & Instant',
+              style: TextStyle(color: AppColors.textMuted, fontSize: 10.5),
+            ),
+          ],
         ),
       ),
     ]),
@@ -356,7 +371,7 @@ class _AddMoneyScreenState extends State<AddMoneyScreen>
                           : [const Color(0xFFDDE6F0), const Color(0xFF8FA8C0)],
                     ).createShader(b),
                     child: Text(
-                      '₹${amt.toInt()}',
+                      '${amt.toInt()}',
                       style: TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.w900,
@@ -366,25 +381,17 @@ class _AddMoneyScreenState extends State<AddMoneyScreen>
                     ),
                   ),
                   const SizedBox(height: 4),
-                  // Coins row
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text('🪙', style: TextStyle(fontSize: selected ? 10 : 9)),
-                      const SizedBox(width: 3),
-                      Text(
-                        coins >= 10000
-                            ? '${(coins / 1000).toStringAsFixed(0)}K'
-                            : '$coins',
-                        style: TextStyle(
-                          color: selected
-                              ? Colors.white.withValues(alpha: 0.85)
-                              : AppColors.textMuted,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
+                  Text(
+                    coins >= 10000
+                        ? '${(coins / 1000).toStringAsFixed(0)}K coins'
+                        : '$coins coins',
+                    style: TextStyle(
+                      color: selected
+                          ? Colors.white.withValues(alpha: 0.85)
+                          : AppColors.textMuted,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ],
               ),
@@ -439,7 +446,6 @@ class _AddMoneyScreenState extends State<AddMoneyScreen>
       hintStyle: TextStyle(
           color: AppColors.textMuted.withValues(alpha: 0.5),
           fontSize: 22, letterSpacing: 2),
-      prefixText: '₹  ',
       prefixStyle: const TextStyle(
           color: AppColors.textSecondary, fontWeight: FontWeight.bold, fontSize: 18),
       filled: true,
@@ -457,9 +463,44 @@ class _AddMoneyScreenState extends State<AddMoneyScreen>
     ),
   );
 
-  Widget _buildPayButton(bool loading) {
+  Widget _buildFeePreview() {
     final amt = double.tryParse(_amountCtl.text) ?? 0;
-    final valid = amt > 0;
+    if (amt <= 0) return const SizedBox.shrink();
+    final s = AppSettingsService.instance.current;
+    final fee   = double.parse((amt * s.paymentGatewayFeePct / 100).toStringAsFixed(2));
+    final total = amt + fee;
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        color: AppColors.darkCard.withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.darkBorder),
+      ),
+      child: Column(children: [
+        _FeeRow(label: 'Amount', value: amt.toStringAsFixed(0),
+            valueColor: AppColors.textSecondary),
+        const SizedBox(height: 6),
+        _FeeRow(
+          label: 'Gateway Fee (${s.paymentGatewayFeePct.toStringAsFixed(1)}%)',
+          value: '+${fee.toStringAsFixed(2)}',
+          valueColor: AppColors.textMuted,
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Divider(color: AppColors.darkBorder, height: 1),
+        ),
+        _FeeRow(label: 'Total to Pay', value: total.toStringAsFixed(2),
+            valueColor: AppColors.accent),
+      ]),
+    );
+  }
+
+  Widget _buildPayButton(bool loading) {
+    final amt    = double.tryParse(_amountCtl.text) ?? 0;
+    final feePct = AppSettingsService.instance.current.paymentGatewayFeePct;
+    final total  = double.parse((amt + amt * feePct / 100).toStringAsFixed(2));
+    final valid  = amt > 0;
     return GestureDetector(
       onTap: (loading || !valid) ? null : () => _showPaymentModal(amt),
       child: AnimatedContainer(
@@ -484,7 +525,7 @@ class _AddMoneyScreenState extends State<AddMoneyScreen>
                   const Icon(Icons.lock_rounded, color: Colors.white, size: 18),
                   const SizedBox(width: 8),
                   Text(
-                    valid ? 'Pay ₹${amt.toStringAsFixed(0)} Securely' : 'Enter Amount',
+                    valid ? 'Pay ${total.toStringAsFixed(0)} Securely' : 'Enter Amount',
                     style: const TextStyle(
                         color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
                   ),
@@ -509,7 +550,11 @@ class _FloatingPaymentCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final coins = amount.toInt();
+    final s           = AppSettingsService.instance.current;
+    final feePct      = s.paymentGatewayFeePct;
+    final gatewayFee  = double.parse((amount * feePct / 100).toStringAsFixed(2));
+    final totalCharge = amount + gatewayFee;
+    final coins       = amount.toInt();
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 20),
       decoration: BoxDecoration(
@@ -598,13 +643,13 @@ class _FloatingPaymentCard extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 24, 24, 24),
             child: Column(children: [
-              // Amount display
+              // Total to pay (big number)
               ShaderMask(
                 shaderCallback: (b) => const LinearGradient(
                   colors: [Color(0xFF00E676), Color(0xFF00C853)],
                 ).createShader(b),
                 child: Text(
-                  '₹${amount.toStringAsFixed(0)}',
+                  totalCharge.toStringAsFixed(0),
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 52,
@@ -614,30 +659,57 @@ class _FloatingPaymentCard extends StatelessWidget {
                   ),
                 ),
               ),
-              const SizedBox(height: 10),
-              // Coins
+              const SizedBox(height: 6),
+              Text('total amount to pay',
+                  style: TextStyle(color: AppColors.textMuted, fontSize: 12)),
+              const SizedBox(height: 12),
+              // Coins pill
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
                 decoration: BoxDecoration(
                   color: const Color(0xFFFFD700).withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                      color: const Color(0xFFFFD700).withValues(alpha: 0.2)),
+                  border: Border.all(color: const Color(0xFFFFD700).withValues(alpha: 0.2)),
                 ),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  const Text('🪙', style: TextStyle(fontSize: 16)),
-                  const SizedBox(width: 6),
-                  Text(
-                    '+$coins coins will be added',
-                    style: const TextStyle(
-                      color: Color(0xFFFFD700),
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
+                child: Text(
+                  '+$coins coins will be added to wallet',
+                  style: const TextStyle(
+                    color: Color(0xFFFFD700),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
                   ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              // Fee breakdown
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.03),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
+                ),
+                child: Column(children: [
+                  _FeeRow(label: 'Amount',
+                      value: amount.toStringAsFixed(0),
+                      valueColor: AppColors.textSecondary),
+                  const SizedBox(height: 6),
+                  _FeeRow(
+                    label: 'Gateway Fee (${feePct.toStringAsFixed(1)}%)',
+                    value: '+${gatewayFee.toStringAsFixed(2)}',
+                    valueColor: AppColors.textMuted,
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Divider(color: Colors.white.withValues(alpha: 0.07), height: 1),
+                  ),
+                  _FeeRow(label: 'Total Charged',
+                      value: totalCharge.toStringAsFixed(2),
+                      valueColor: const Color(0xFF00E676)),
                 ]),
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 14),
               // Payment methods
               Container(
                 padding:
@@ -697,7 +769,7 @@ class _FloatingPaymentCard extends StatelessWidget {
                           color: Colors.white, size: 18),
                       const SizedBox(width: 10),
                       Text(
-                        'Pay ₹${amount.toStringAsFixed(0)} Now',
+                        'Pay ${totalCharge.toStringAsFixed(0)} Now',
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 17,
@@ -750,6 +822,24 @@ class _MethodDivider extends StatelessWidget {
         width: 1,
         height: 18,
         color: Colors.white.withValues(alpha: 0.1),
+      );
+}
+
+class _FeeRow extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color valueColor;
+  const _FeeRow({required this.label, required this.value, required this.valueColor});
+
+  @override
+  Widget build(BuildContext context) => Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label,
+              style: const TextStyle(color: AppColors.textMuted, fontSize: 11.5)),
+          Text(value,
+              style: TextStyle(color: valueColor, fontSize: 11.5, fontWeight: FontWeight.w500)),
+        ],
       );
 }
 

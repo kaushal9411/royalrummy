@@ -11,12 +11,15 @@ query(`
     max_withdrawal       NUMERIC(10,2) NOT NULL DEFAULT 10000,
     welcome_bonus        INTEGER      NOT NULL DEFAULT 50,
     max_bet_amount       NUMERIC(10,2) NOT NULL DEFAULT 100,
-    platform_fee_pct     NUMERIC(5,2) NOT NULL DEFAULT 0,
-    updated_at           TIMESTAMPTZ  DEFAULT NOW(),
+    platform_fee_pct          NUMERIC(5,2) NOT NULL DEFAULT 0,
+    payment_gateway_fee_pct   NUMERIC(5,2) NOT NULL DEFAULT 2,
+    updated_at                TIMESTAMPTZ  DEFAULT NOW(),
     CONSTRAINT single_row CHECK (id = 1)
   )
 `).then(() =>
   query(`INSERT INTO platform_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`)
+).then(() =>
+  query(`ALTER TABLE platform_settings ADD COLUMN IF NOT EXISTS payment_gateway_fee_pct NUMERIC(5,2) NOT NULL DEFAULT 2`)
 ).catch(() => {});
 
 // ── In-memory cache (60 s TTL) ────────────────────────────────────────────────
@@ -30,8 +33,9 @@ const DEFAULTS = {
   min_withdrawal:       100,
   max_withdrawal:       10000,
   welcome_bonus:        50,
-  max_bet_amount:       100,
-  platform_fee_pct:     0,
+  max_bet_amount:             100,
+  platform_fee_pct:           0,
+  payment_gateway_fee_pct:    2,
 };
 
 const getSettings = async () => {
@@ -95,7 +99,8 @@ const _pushSettingsToDevices = async (settings) => {
       max_withdrawal:       String(settings.max_withdrawal),
       welcome_bonus:        String(settings.welcome_bonus),
       max_bet_amount:       String(settings.max_bet_amount),
-      platform_fee_pct:     String(settings.platform_fee_pct),
+      platform_fee_pct:         String(settings.platform_fee_pct),
+      payment_gateway_fee_pct:  String(settings.payment_gateway_fee_pct),
     },
     android: { priority: 'high' },
     apns:    { payload: { aps: { 'content-available': 1 } } },

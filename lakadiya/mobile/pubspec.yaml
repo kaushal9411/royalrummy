@@ -61,6 +61,10 @@ dependencies:
   # Image picker for KYC document upload
   image_picker: ^1.1.2
 
+  # Receipt share + download
+  share_plus: ^10.0.3
+  path_provider: ^2.1.4
+
 
 dev_dependencies:
   flutter_test:

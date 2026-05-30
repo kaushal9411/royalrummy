@@ -48,7 +48,7 @@ export default function SettingsPage() {
         const defaults: AdminSettings = {
           maintenance_mode: false, registration_enabled: true,
           min_withdrawal: 100, max_withdrawal: 10000,
-          welcome_bonus: 50, max_bet_amount: 100, platform_fee_pct: 0,
+          welcome_bonus: 50, max_bet_amount: 100, platform_fee_pct: 0, payment_gateway_fee_pct: 2,
         };
         setSettings(defaults);
         setDraft({ ...defaults });
@@ -155,23 +155,28 @@ export default function SettingsPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-2 uppercase tracking-wider">Min Withdrawal</label>
-                <NumberInput value={draft.min_withdrawal} onChange={v => set('min_withdrawal', v)} min={1} prefix="₹" />
+                <NumberInput value={draft.min_withdrawal} onChange={v => set('min_withdrawal', v)} min={1} />
                 <p className="text-xs text-gray-600 mt-1">Minimum amount users can withdraw</p>
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-2 uppercase tracking-wider">Max Withdrawal</label>
-                <NumberInput value={draft.max_withdrawal} onChange={v => set('max_withdrawal', v)} min={1} prefix="₹" />
+                <NumberInput value={draft.max_withdrawal} onChange={v => set('max_withdrawal', v)} min={1} />
                 <p className="text-xs text-gray-600 mt-1">Maximum amount users can withdraw</p>
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-2 uppercase tracking-wider">Welcome Bonus</label>
-                <NumberInput value={draft.welcome_bonus} onChange={v => set('welcome_bonus', v)} min={0} prefix="🪙" />
+                <NumberInput value={draft.welcome_bonus} onChange={v => set('welcome_bonus', v)} min={0} />
                 <p className="text-xs text-gray-600 mt-1">Coins given to new users on signup</p>
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-2 uppercase tracking-wider">Platform Fee</label>
                 <NumberInput value={draft.platform_fee_pct} onChange={v => set('platform_fee_pct', v)} min={0} max={50} step={0.5} suffix="%" />
                 <p className="text-xs text-gray-600 mt-1">Percentage cut on bet winnings</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-2 uppercase tracking-wider">Payment Gateway Fee</label>
+                <NumberInput value={draft.payment_gateway_fee_pct} onChange={v => set('payment_gateway_fee_pct', v)} min={0} max={10} step={0.1} suffix="%" />
+                <p className="text-xs text-gray-600 mt-1">Fee charged per wallet top-up transaction</p>
               </div>
             </div>
           </div>
@@ -184,7 +189,7 @@ export default function SettingsPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-2 uppercase tracking-wider">Max Bet Amount</label>
-                <NumberInput value={draft.max_bet_amount} onChange={v => set('max_bet_amount', v)} min={0} prefix="₹" />
+                <NumberInput value={draft.max_bet_amount} onChange={v => set('max_bet_amount', v)} min={0} />
                 <p className="text-xs text-gray-600 mt-1">Maximum allowed bet per room</p>
               </div>
             </div>

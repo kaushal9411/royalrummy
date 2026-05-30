@@ -8,6 +8,7 @@ import '../../../../../core/theme/app_theme.dart';
 import '../bloc/payment_bloc.dart';
 import '../../data/models/payment_model.dart';
 import 'withdrawal_confirmation_screen.dart';
+import 'transaction_receipt.dart';
 
 class WithdrawScreen extends StatefulWidget {
   const WithdrawScreen({super.key});
@@ -431,7 +432,9 @@ class _WithdrawalTile extends StatelessWidget {
         opacity: v,
         child: Transform.translate(offset: Offset(0, 10 * (1 - v)), child: child),
       ),
-      child: Container(
+      child: GestureDetector(
+        onTap: () => showTransactionReceipt(context, tx),
+        child: Container(
         margin: const EdgeInsets.only(bottom: 8),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
         decoration: BoxDecoration(
@@ -489,6 +492,7 @@ class _WithdrawalTile extends StatelessWidget {
             ),
           ]),
         ]),
+      ),
       ),
     );
   }

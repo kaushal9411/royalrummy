@@ -1,9 +1,13 @@
 class PaymentOrder {
   final String orderId;
-  final int amount;
+  final int    amount;        // paise — used directly by Razorpay SDK
   final String currency;
   final String transactionId;
-  final int coins;
+  final int    coins;
+  final double baseAmount;    // what user wants in wallet
+  final double gatewayFee;   // fee added on top
+  final double gatewayFeePct;
+  final double totalCharge;  // baseAmount + gatewayFee
 
   PaymentOrder({
     required this.orderId,
@@ -11,15 +15,23 @@ class PaymentOrder {
     required this.currency,
     required this.transactionId,
     required this.coins,
+    required this.baseAmount,
+    required this.gatewayFee,
+    required this.gatewayFeePct,
+    required this.totalCharge,
   });
 
   factory PaymentOrder.fromJson(Map<String, dynamic> json) {
     return PaymentOrder(
-      orderId: json['orderId']?.toString() ?? '',
-      amount: _toInt(json['amount']),
-      currency: json['currency']?.toString() ?? 'INR',
+      orderId:       json['orderId']?.toString() ?? '',
+      amount:        _toInt(json['amount']),
+      currency:      json['currency']?.toString() ?? 'INR',
       transactionId: json['transactionId']?.toString() ?? '',
-      coins: _toInt(json['coins']),
+      coins:         _toInt(json['coins']),
+      baseAmount:    _toDouble(json['baseAmount']),
+      gatewayFee:    _toDouble(json['gatewayFee']),
+      gatewayFeePct: _toDouble(json['gatewayFeePct']),
+      totalCharge:   _toDouble(json['totalCharge']),
     );
   }
 
@@ -30,6 +42,10 @@ class PaymentOrder {
       'currency': currency,
       'transactionId': transactionId,
       'coins': coins,
+      'baseAmount': baseAmount,
+      'gatewayFee': gatewayFee,
+      'gatewayFeePct': gatewayFeePct,
+      'totalCharge': totalCharge,
     };
   }
 
@@ -194,6 +210,9 @@ class Transaction {
   final String status;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final Map<String, dynamic>? metadata;
+  final String? razorpayOrderId;
+  final String? razorpayPaymentId;
 
   Transaction({
     required this.id,
@@ -203,34 +222,41 @@ class Transaction {
     required this.status,
     required this.createdAt,
     required this.updatedAt,
+    this.metadata,
+    this.razorpayOrderId,
+    this.razorpayPaymentId,
   });
 
   factory Transaction.fromJson(Map<String, dynamic> json) {
     print('[Transaction] Parsing JSON: $json');
-    
+
     try {
-      DateTime _parseDateTime(dynamic value) {
+      DateTime parseDateTime(dynamic value) {
         if (value == null) return DateTime.now();
         if (value is DateTime) return value;
         if (value is String) {
-          try {
-            return DateTime.parse(value);
-          } catch (e) {
-            print('[Transaction] Failed to parse datetime: $value, error: $e');
-            return DateTime.now();
-          }
+          try { return DateTime.parse(value); } catch (_) { return DateTime.now(); }
         }
         return DateTime.now();
       }
 
+      Map<String, dynamic>? parseMetadata(dynamic value) {
+        if (value == null) return null;
+        if (value is Map) return Map<String, dynamic>.from(value);
+        return null;
+      }
+
       final transaction = Transaction(
-        id: json['id']?.toString() ?? '',
-        amount: _toDouble(json['amount']),
-        coins: _toInt(json['coins']),
-        type: json['type']?.toString() ?? 'add',
-        status: json['status']?.toString() ?? 'pending',
-        createdAt: _parseDateTime(json['createdAt']),
-        updatedAt: _parseDateTime(json['updatedAt']),
+        id:                json['id']?.toString() ?? '',
+        amount:            _toDouble(json['amount']),
+        coins:             _toInt(json['coins']),
+        type:              json['type']?.toString() ?? 'add',
+        status:            json['status']?.toString() ?? 'pending',
+        createdAt:         parseDateTime(json['created_at'] ?? json['createdAt']),
+        updatedAt:         parseDateTime(json['updated_at'] ?? json['updatedAt']),
+        metadata:          parseMetadata(json['metadata']),
+        razorpayOrderId:   json['razorpay_order_id']?.toString(),
+        razorpayPaymentId: json['razorpay_payment_id']?.toString(),
       );
       print('[Transaction] Parsed successfully: $transaction');
       return transaction;
