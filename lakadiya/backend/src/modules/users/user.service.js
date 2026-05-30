@@ -1,9 +1,31 @@
 const { query } = require('../../config/database');
 
+// Ensure compliance columns exist on users table (idempotent)
+const ensureComplianceColumns = async () => {
+  await query(`
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS date_of_birth DATE,
+      ADD COLUMN IF NOT EXISTS kyc_verified   BOOLEAN DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS is_minor        BOOLEAN DEFAULT FALSE
+  `);
+};
+ensureComplianceColumns().catch(() => {}); // fire-and-forget on startup
+
+function computeAge(dob) {
+  if (!dob) return null;
+  const now = new Date();
+  const birth = new Date(dob);
+  let age = now.getFullYear() - birth.getFullYear();
+  if (now.getMonth() < birth.getMonth() ||
+      (now.getMonth() === birth.getMonth() && now.getDate() < birth.getDate())) age--;
+  return age;
+}
+
 const getProfile = async (userId) => {
   const result = await query(
     `SELECT u.id, u.username, u.email, u.mobile, u.avatar_url, u.coins, u.xp, u.level,
             u.provider, u.created_at, u.last_seen,
+            u.date_of_birth, u.kyc_verified, u.is_minor,
             ps.matches_played, ps.matches_won, ps.total_score,
             ps.bids_exact, ps.bids_failed, ps.bids_over
      FROM users u
@@ -12,23 +34,37 @@ const getProfile = async (userId) => {
     [userId]
   );
   if (!result.rows.length) throw { status: 404, message: 'User not found' };
-  return result.rows[0];
+  const row = result.rows[0];
+  row.age = computeAge(row.date_of_birth);
+  return row;
 };
 
-const updateProfile = async (userId, { username, email, avatarUrl }) => {
+const updateProfile = async (userId, { username, email, avatarUrl, dateOfBirth, date_of_birth }) => {
+  dateOfBirth = dateOfBirth || date_of_birth; // accept both camelCase and snake_case
   if (username) {
     const taken = await query('SELECT id FROM users WHERE username = $1 AND id != $2', [username, userId]);
     if (taken.rows.length) throw { status: 409, message: 'Username taken' };
   }
 
+  // Compute is_minor if DOB is being set
+  let isMinor = null;
+  if (dateOfBirth) {
+    const age = computeAge(dateOfBirth);
+    isMinor = age !== null && age < 18;
+  }
+
   const result = await query(
     `UPDATE users SET
-       username   = COALESCE($1, username),
-       email      = COALESCE($2, email),
-       avatar_url = COALESCE($3, avatar_url)
+       username       = COALESCE($1, username),
+       email          = COALESCE($2, email),
+       avatar_url     = COALESCE($3, avatar_url),
+       date_of_birth  = COALESCE($5, date_of_birth),
+       is_minor       = CASE WHEN $5 IS NOT NULL THEN $6 ELSE is_minor END
      WHERE id = $4
-     RETURNING id, username, email, mobile, avatar_url, coins, xp, level, provider`,
-    [username || null, email || null, avatarUrl || null, userId]
+     RETURNING id, username, email, mobile, avatar_url, coins, xp, level, provider,
+               date_of_birth, kyc_verified, is_minor`,
+    [username || null, email || null, avatarUrl || null, userId,
+     dateOfBirth || null, isMinor]
   );
   return result.rows[0];
 };

@@ -34,9 +34,13 @@ const getUsers = async ({ page = 1, limit = 20, search = '', banned = null }) =>
   const result = await query(
     `SELECT u.id, u.username, u.email, u.mobile, u.provider, u.coins, u.xp, u.level,
             u.is_banned, u.created_at, u.last_seen,
+            u.date_of_birth, u.kyc_verified, u.is_minor,
+            EXTRACT(YEAR FROM AGE(CURRENT_DATE, u.date_of_birth))::int AS age,
+            COALESCE(k.status, 'not_submitted') AS kyc_status,
             ps.matches_played, ps.matches_won
      FROM users u
      LEFT JOIN player_stats ps ON ps.user_id = u.id
+     LEFT JOIN kyc_submissions k ON k.user_id = u.id
      ${whereClause}
      ORDER BY u.created_at DESC
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -119,4 +123,44 @@ const getAnalytics = async () => {
   };
 };
 
-module.exports = { getDashboardStats, getUsers, banUser, unbanUser, getMatches, getAnalytics };
+// Full compliance detail for a single user (admin-only view)
+const getUserDetail = async (userId) => {
+  const [userRes, kycRes, rgRes, notifRes] = await Promise.all([
+    query(
+      `SELECT u.id, u.username, u.email, u.mobile, u.provider, u.coins, u.xp, u.level,
+              u.is_banned, u.ban_reason, u.created_at, u.last_seen,
+              u.date_of_birth, u.kyc_verified, u.is_minor,
+              EXTRACT(YEAR FROM AGE(CURRENT_DATE, u.date_of_birth))::int AS age,
+              ps.matches_played, ps.matches_won, ps.total_score, ps.bids_exact, ps.bids_failed
+       FROM users u
+       LEFT JOIN player_stats ps ON ps.user_id = u.id
+       WHERE u.id = $1`,
+      [userId]
+    ),
+    query(
+      `SELECT id, status, pan_number, full_name, admin_remark, submitted_at, reviewed_at
+       FROM kyc_submissions WHERE user_id = $1`,
+      [userId]
+    ),
+    query(
+      `SELECT daily_limit, weekly_limit, monthly_limit, self_excluded, exclusion_until
+       FROM responsible_gaming_settings WHERE user_id = $1`,
+      [userId]
+    ),
+    query(
+      `SELECT game, wallet, promo FROM notification_preferences WHERE user_id = $1`,
+      [userId]
+    ),
+  ]);
+
+  if (!userRes.rows.length) throw { status: 404, message: 'User not found' };
+
+  return {
+    ...userRes.rows[0],
+    kyc: kycRes.rows[0] || null,
+    responsible_gaming: rgRes.rows[0] || null,
+    notification_prefs: notifRes.rows[0] || { game: true, wallet: true, promo: true },
+  };
+};
+
+module.exports = { getDashboardStats, getUsers, getUserDetail, banUser, unbanUser, getMatches, getAnalytics };

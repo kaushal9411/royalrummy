@@ -42,6 +42,48 @@ query(`
   )
 `).catch(() => {});
 
+// Per-user notification opt-out preferences
+// otp is always allowed — not stored here
+query(`
+  CREATE TABLE IF NOT EXISTS notification_preferences (
+    user_id    UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    game       BOOLEAN DEFAULT TRUE,
+    wallet     BOOLEAN DEFAULT TRUE,
+    promo      BOOLEAN DEFAULT TRUE,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+  )
+`).catch(() => {});
+
+// ── Notification preference helpers ──────────────────────────────────────────
+
+// Returns user's stored prefs or safe defaults (all enabled)
+const getUserNotifPrefs = async (userId) => {
+  const { rows } = await query(
+    'SELECT game, wallet, promo FROM notification_preferences WHERE user_id = $1',
+    [userId]
+  );
+  if (!rows.length) return { game: true, wallet: true, promo: true };
+  return rows[0];
+};
+
+const setUserNotifPrefs = async (userId, { game, wallet, promo }) => {
+  await query(
+    `INSERT INTO notification_preferences (user_id, game, wallet, promo, updated_at)
+     VALUES ($1, $2, $3, $4, NOW())
+     ON CONFLICT (user_id) DO UPDATE
+       SET game=$2, wallet=$3, promo=$4, updated_at=NOW()`,
+    [userId, game ?? true, wallet ?? true, promo ?? true]
+  );
+};
+
+// Map channel ID → preference key  (otp_channel is always allowed)
+const _channelAllowed = (prefs, channelId) => {
+  if (!channelId || channelId === 'otp_channel') return true;
+  if (channelId === 'room_channel')   return prefs.game   !== false;
+  if (channelId === 'wallet_channel') return prefs.wallet !== false;
+  return prefs.promo !== false; // default_channel, general
+};
+
 // ── Store / refresh device FCM token ─────────────────────────────────────────
 const storeDeviceToken = async (userId, fcmToken, deviceType = 'android') => {
   await query(
@@ -61,6 +103,15 @@ const sendOtpNotification = async (fcmToken, otp) => {
 
 // ── Send generic notification to a user (looks up their token from DB) ────────
 const sendNotification = async (userId, title, body, data = {}, channelId = 'default_channel') => {
+  // Check user's notification preferences before sending
+  try {
+    const prefs = await getUserNotifPrefs(userId);
+    if (!_channelAllowed(prefs, channelId)) {
+      logger.info(`[FCM] Skipped — user ${userId} disabled channel "${channelId}"`);
+      return { success: false, reason: 'User disabled this notification type' };
+    }
+  } catch (_) { /* if prefs lookup fails, allow the notification through */ }
+
   const messaging = admin.messaging();
 
   const result = await query(
@@ -128,11 +179,14 @@ const sendNotificationToMultiple = async (userIds, title, body, data = {}) => {
 const sendOpenRoomNotification = async (roomCode, betAmount, hostName = 'A player') => {
   if (!ensureFirebase()) return;
 
+  // Only send to users who have NOT disabled game notifications
   const result = await query(
-    `SELECT DISTINCT ON (user_id) fcm_token
-     FROM device_tokens
-     WHERE is_active = TRUE
-     ORDER BY user_id, last_used DESC`
+    `SELECT DISTINCT ON (dt.user_id) dt.fcm_token
+     FROM device_tokens dt
+     LEFT JOIN notification_preferences np ON np.user_id = dt.user_id
+     WHERE dt.is_active = TRUE
+       AND (np.game IS NULL OR np.game = TRUE)
+     ORDER BY dt.user_id, dt.last_used DESC`
   );
   if (!result.rows.length) return;
 
@@ -261,4 +315,6 @@ module.exports = {
   sendOpenRoomNotification,
   sendAdminBroadcast,
   getBroadcastHistory,
+  getUserNotifPrefs,
+  setUserNotifPrefs,
 };

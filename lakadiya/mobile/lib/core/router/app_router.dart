@@ -8,6 +8,13 @@ import '../../features/splash/presentation/pages/splash_page.dart';
 import '../../features/lobby/presentation/pages/room_page.dart';
 import '../../features/game/presentation/pages/game_page.dart';
 import '../../features/profile/presentation/pages/profile_page.dart';
+import '../../features/profile/presentation/pages/settings_page.dart';
+import '../../features/profile/presentation/pages/age_verification_page.dart';
+import '../../features/profile/presentation/pages/kyc_page.dart';
+import '../../features/profile/presentation/pages/responsible_gaming_page.dart';
+import '../../features/profile/presentation/pages/notification_settings_page.dart';
+import '../../features/profile/presentation/pages/data_safety_page.dart';
+import '../../features/legal/presentation/pages/legal_page.dart';
 import '../../features/leaderboard/presentation/pages/leaderboard_page.dart';
 import '../../features/payments/presentation/bloc/payment_bloc.dart';
 import '../../features/payments/presentation/screens/wallet_screen.dart';
@@ -86,6 +93,28 @@ GoRouter createRouter(AuthBloc authBloc, PaymentBloc paymentBloc) => GoRouter(
       builder: (_, state) => DmScreen(
         userId: state.pathParameters['userId']!,
         username: state.extra as String? ?? 'Player',
+      ),
+    ),
+
+    // ── Compliance & Settings ──────────────────────────────────────────────
+    GoRoute(path: '/settings',              builder: (_, __) => const SettingsPage()),
+    GoRoute(path: '/age-verification',      builder: (_, __) => const AgeVerificationPage()),
+    GoRoute(path: '/kyc',                   builder: (_, __) => const KycPage()),
+    GoRoute(path: '/responsible-gaming',    builder: (_, __) => const ResponsibleGamingPage()),
+    GoRoute(path: '/notification-settings', builder: (_, __) => const NotificationSettingsPage()),
+    GoRoute(path: '/data-safety',           builder: (_, __) => const DataSafetyPage()),
+    GoRoute(
+      path: '/privacy-policy',
+      builder: (_, __) => const LegalPage(
+        title: 'Privacy Policy',
+        assetPath: 'assets/legal/privacy_policy.html',
+      ),
+    ),
+    GoRoute(
+      path: '/terms',
+      builder: (_, __) => const LegalPage(
+        title: 'Terms of Service',
+        assetPath: 'assets/legal/terms_of_service.html',
       ),
     ),
   ],

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:razorpay_flutter/razorpay_flutter.dart';
+import '../../../../../core/services/credentials_service.dart';
 import '../../../../../core/theme/app_theme.dart';
 import '../bloc/payment_bloc.dart';
 import '../../data/models/payment_model.dart';
@@ -87,8 +88,9 @@ class _AddMoneyScreenState extends State<AddMoneyScreen>
   }
 
   void _openRazorpay(PaymentOrder order) {
+    final key = CredentialsService.instance.razorpayKeyId;
     _razorpay.open({
-      'key':         'rzp_test_SrD9RqGOrFNN3c',
+      'key':         key,
       'order_id':    order.orderId,
       'amount':      order.amount,
       'currency':    order.currency,

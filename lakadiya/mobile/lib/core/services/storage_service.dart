@@ -25,6 +25,11 @@ class StorageService {
 
   static Future<void> clear() => _box.clear();
 
+  static bool getBool(String key, {bool defaultValue = false}) =>
+      _box.get(key, defaultValue: defaultValue) as bool;
+
+  static Future<void> setBool(String key, bool value) => _box.put(key, value);
+
   static Future<void> saveTheme(String mode) =>
       _box.put(AppConstants.themeKey, mode);
 

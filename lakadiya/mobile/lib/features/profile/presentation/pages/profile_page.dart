@@ -245,6 +245,10 @@ class _ProfilePageState extends State<ProfilePage>
                       fontWeight: FontWeight.w800)),
             ),
             const Spacer(),
+            IconButton(
+              icon: const Icon(Icons.settings_rounded, color: AppColors.textSecondary),
+              onPressed: () => context.push('/settings'),
+            ),
             PopupMenuButton<String>(
               icon: const Icon(Icons.more_vert_rounded,
                   color: AppColors.textSecondary),
@@ -252,8 +256,9 @@ class _ProfilePageState extends State<ProfilePage>
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12)),
               onSelected: (v) {
-                if (v == 'logout')
+                if (v == 'logout') {
                   context.read<AuthBloc>().add(AuthLogoutRequested());
+                }
               },
               itemBuilder: (_) => [
                 const PopupMenuItem(

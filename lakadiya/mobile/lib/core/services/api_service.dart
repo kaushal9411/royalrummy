@@ -1,4 +1,6 @@
+import 'dart:io';
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
 import '../constants/app_constants.dart';
 import 'storage_service.dart';
 
@@ -21,6 +23,20 @@ class ApiService {
       },
       validateStatus: (status) => status != null && status < 500,
     ));
+
+    // TLS / certificate pinning.
+    // In production set PINNED_CERT_FINGERPRINT in your build config and
+    // compare cert.sha1 here. For local HTTP dev this block is a no-op.
+    (_dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
+      final client = HttpClient();
+      const pinnedFingerprint = String.fromEnvironment('PINNED_CERT_FINGERPRINT');
+      if (pinnedFingerprint.isNotEmpty) {
+        client.badCertificateCallback = (cert, host, port) =>
+            cert.sha1.map((b) => b.toRadixString(16).padLeft(2, '0')).join(':') ==
+            pinnedFingerprint.toLowerCase();
+      }
+      return client;
+    };
 
     _dio.interceptors.add(InterceptorsWrapper(
       onRequest: (options, handler) {
@@ -55,6 +71,10 @@ class ApiService {
 
   Future<Response> patch(String path, {dynamic data}) {
     return _dio.patch(path, data: data);
+  }
+
+  Future<Response> put(String path, {dynamic data}) {
+    return _dio.put(path, data: data);
   }
 
   Future<Response> delete(String path) {

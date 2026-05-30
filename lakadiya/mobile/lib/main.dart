@@ -1,13 +1,16 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'core/router/app_router.dart';
 import 'core/services/api_service.dart';
 import 'core/services/app_settings_service.dart';
+import 'core/services/credentials_service.dart';
 import 'core/services/fcm_service.dart';
 import 'core/services/socket_service.dart';
 import 'core/services/storage_service.dart';
@@ -30,6 +33,13 @@ void main() async {
     await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
     FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
     await FcmService.instance.init();
+    // Crashlytics: route all Flutter framework errors to Crashlytics
+    FlutterError.onError = FirebaseCrashlytics.instance.recordFlutterFatalError;
+    // Catch async errors outside the Flutter framework
+    PlatformDispatcher.instance.onError = (error, stack) {
+      FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
+      return true;
+    };
   } catch (e) {
     // Firebase not configured — OTP falls back to Fast2SMS or dev console log
   }
@@ -58,10 +68,11 @@ class _LakadiyaAppState extends State<LakadiyaApp> {
     _gameBloc = GameBloc();
     _paymentBloc = PaymentBloc(PaymentRepository(ApiService()), SocketService());
 
-    // Register FCM token with backend after every successful login
+    // After login: register FCM token and load encrypted credentials from backend
     _authBloc.stream.listen((state) {
       if (state is AuthAuthenticated) {
         _registerFcmToken();
+        unawaited(CredentialsService.instance.load());
       }
     });
   }

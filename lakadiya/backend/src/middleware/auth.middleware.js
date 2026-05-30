@@ -36,6 +36,21 @@ const authenticateAdmin = async (req, res, next) => {
   }
 };
 
+// Same as authenticateAdmin but also accepts ?token= query param
+// Used for <img> / <a> endpoints where setting headers is not possible
+const authenticateAdminFile = (req, res, next) => {
+  const raw = req.headers.authorization?.replace('Bearer ', '') || req.query.token;
+  if (!raw) return res.status(401).json({ message: 'No token provided' });
+  try {
+    const decoded = jwt.verify(raw, process.env.JWT_SECRET);
+    if (!decoded.isAdmin) return res.status(403).end();
+    req.admin = decoded;
+    next();
+  } catch {
+    return res.status(401).end();
+  }
+};
+
 const authenticateSocket = (socket, next) => {
   const token = socket.handshake.auth?.token;
   if (!token) return next(new Error('No token'));
@@ -49,4 +64,4 @@ const authenticateSocket = (socket, next) => {
   }
 };
 
-module.exports = { authenticate, authenticateAdmin, authenticateSocket };
+module.exports = { authenticate, authenticateAdmin, authenticateAdminFile, authenticateSocket };

@@ -70,7 +70,68 @@ export interface AdminUser {
   coins: number; xp: number; level: number;
   is_banned: boolean; created_at: string; last_seen: string;
   matches_played: number; matches_won: number;
+  // Compliance fields
+  date_of_birth: string | null;
+  age: number | null;
+  kyc_verified: boolean;
+  kyc_status: 'not_submitted' | 'pending' | 'approved' | 'rejected';
+  is_minor: boolean | null;
 }
+
+export interface UserKyc {
+  id: string; status: string; pan_number: string | null; full_name: string | null;
+  admin_remark: string | null; submitted_at: string; reviewed_at: string | null;
+}
+
+export interface UserResponsibleGaming {
+  daily_limit: number | null; weekly_limit: number | null; monthly_limit: number | null;
+  self_excluded: boolean; exclusion_until: string | null;
+}
+
+export interface UserNotifPrefs {
+  game:   boolean;
+  wallet: boolean;
+  promo:  boolean;
+}
+
+export interface AdminUserDetail extends AdminUser {
+  ban_reason: string | null; total_score: number; bids_exact: number; bids_failed: number;
+  kyc: UserKyc | null;
+  responsible_gaming: UserResponsibleGaming | null;
+  notification_prefs: UserNotifPrefs;
+}
+
+export interface KycSubmission {
+  id: string; user_id: string; username: string; mobile: string | null;
+  status: string; pan_number: string | null; full_name: string | null;
+  pan_doc_path: string | null; selfie_path: string | null;
+  admin_remark: string | null; submitted_at: string; reviewed_at: string | null;
+}
+
+export const getUserDetail = async (userId: string): Promise<AdminUserDetail> => {
+  const res = await api.get(`/admin/users/${userId}/detail`);
+  return res.data;
+};
+
+export const getPendingKyc = async (): Promise<KycSubmission[]> => {
+  const res = await api.get('/admin/kyc/pending');
+  return res.data;
+};
+
+export const approveKyc = async (kycId: string): Promise<void> => {
+  await api.post(`/admin/kyc/${kycId}/approve`);
+};
+
+export const rejectKyc = async (kycId: string, remark: string): Promise<void> => {
+  await api.post(`/admin/kyc/${kycId}/reject`, { remark });
+};
+
+/** Returns a URL that serves the KYC document inline — includes admin token as query param */
+export const kycDocUrl = (kycId: string, docType: 'pan_doc' | 'selfie'): string => {
+  const token  = Cookies.get('admin_token') ?? '';
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
+  return `${apiUrl}/admin/kyc/${kycId}/document/${docType}?token=${encodeURIComponent(token)}`;
+};
 
 export interface AdminMatch {
   id: string; status: string; created_at: string; finished_at: string | null;
@@ -246,4 +307,25 @@ export const approveWithdrawal = async (id: string) => {
 export const rejectWithdrawal = async (id: string, reason: string) => {
   const res = await api.patch(`/payments/admin/withdrawals/${id}/reject`, { reason });
   return res.data;
+};
+
+// ─── Credentials ──────────────────────────────────────────────────────────────
+
+export interface AdminCredential {
+  key_name:     string;
+  masked_value: string;  // e.g. "rzp_••••••••live" — never returns plaintext
+  updated_at:   string;
+}
+
+export const listCredentials = async (): Promise<AdminCredential[]> => {
+  const res = await api.get('/admin/credentials');
+  return res.data;
+};
+
+export const saveCredential = async (key_name: string, value: string): Promise<void> => {
+  await api.post('/admin/credentials', { key_name, value });
+};
+
+export const deleteCredential = async (key_name: string): Promise<void> => {
+  await api.delete(`/admin/credentials/${encodeURIComponent(key_name)}`);
 };

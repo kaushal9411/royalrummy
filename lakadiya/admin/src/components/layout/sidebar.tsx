@@ -23,6 +23,7 @@ const NAV_SECTIONS = [
     items: [
       { href: '/payments',      label: 'Payments',       icon: '💳', accent: '#10B981' },
       { href: '/withdrawals',   label: 'Withdrawals',    icon: '🏦', accent: '#EF4444' },
+      { href: '/kyc',           label: 'KYC Review',     icon: '🪪', accent: '#F59E0B' },
     ],
   },
   {
@@ -35,6 +36,7 @@ const NAV_SECTIONS = [
     label: 'Admin',
     items: [
       { href: '/notifications', label: 'Notifications',  icon: '🔔', accent: '#F59E0B' },
+      { href: '/credentials',   label: 'Credentials',   icon: '🔐', accent: '#8B5CF6' },
       { href: '/settings',      label: 'Settings',       icon: '⚙️',  accent: '#6B7280' },
     ],
   },

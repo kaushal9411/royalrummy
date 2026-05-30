@@ -7,6 +7,7 @@ import '../../../../../core/services/app_settings_service.dart';
 import '../../../../../core/theme/app_theme.dart';
 import '../bloc/payment_bloc.dart';
 import '../../data/models/payment_model.dart';
+import 'withdrawal_confirmation_screen.dart';
 
 class WithdrawScreen extends StatefulWidget {
   const WithdrawScreen({super.key});
@@ -91,7 +92,7 @@ class _WithdrawScreenState extends State<WithdrawScreen>
       _snack('Insufficient balance', AppColors.danger);
       return;
     }
-    context.read<PaymentBloc>().add(RequestWithdrawalEvent(amount));
+    showWithdrawalConfirmation(context, amount, _balance?.currentBalance ?? amount);
   }
 
   @override
