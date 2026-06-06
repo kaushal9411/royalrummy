@@ -54,7 +54,14 @@ async function getCredential(keyName) {
     [keyName]
   );
   if (!rows.length) return null;
-  return decrypt(rows[0].encrypted, rows[0].iv, rows[0].tag);
+  try {
+    return decrypt(rows[0].encrypted, rows[0].iv, rows[0].tag);
+  } catch {
+    // Encryption key changed since credential was stored — treat as missing.
+    // autoSeedFromEnv will re-write the row with the current key on next startup.
+    console.warn(`[Credentials] Decrypt failed for '${keyName}' — key mismatch, falling back to env`);
+    return null;
+  }
 }
 
 async function getPublicAppKeys() {

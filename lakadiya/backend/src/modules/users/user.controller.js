@@ -164,9 +164,16 @@ const searchUsers = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+const getPublicProfile = async (req, res, next) => {
+  try {
+    const profile = await userService.getPublicProfile(req.params.userId);
+    res.json(profile);
+  } catch (err) { next(err); }
+};
+
 module.exports = {
   getMe, updateProfile, getMatchHistory,
   sendFriendRequest, acceptFriendRequest, declineFriendRequest, getPendingRequests, getFriends,
   getNotifications, markNotificationsRead,
-  searchUsers,
+  searchUsers, getPublicProfile,
 };

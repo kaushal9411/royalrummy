@@ -471,6 +471,10 @@ class GameBloc extends Bloc<GameEvent, GameState> {
   }
 
   void _onStateSync(GameStateSynced event, Emitter<GameState> emit) {
+    // mySeat comes from the server since the sync response is already
+    // filtered for this player's hand.  Fall back to _mySeat if absent.
+    final seatFromSync = (event.data['mySeat'] as num?)?.toInt();
+    if (seatFromSync != null) _mySeat = seatFromSync;
     final gs = GameStateEntity.fromJson(event.data, _mySeat);
     emit(GameInProgress(state: gs));
   }

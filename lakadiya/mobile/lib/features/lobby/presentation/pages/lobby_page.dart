@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../../../core/services/api_service.dart';
 import '../../../../core/services/app_settings_service.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/widgets/user_avatar.dart';
 import '../../../auth/presentation/bloc/auth_bloc.dart';
 import '../../../game/presentation/bloc/game_bloc.dart';
 import '../../../payments/presentation/bloc/payment_bloc.dart';
@@ -21,6 +22,7 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
   final _codeCtl = TextEditingController();
   bool _loading = false;
   List<Map<String, dynamic>> _publicRooms = [];
+  List<Map<String, dynamic>> _myRooms = [];
   Map<String, dynamic>? _compliance;
 
   late final AnimationController _enterCtrl;
@@ -37,6 +39,7 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
           ..repeat(reverse: true);
     _fadeIn = CurvedAnimation(parent: _enterCtrl, curve: Curves.easeOut);
     _loadPublicRooms();
+    _loadMyRooms();
     _loadCompliance();
     Future.delayed(const Duration(milliseconds: 80), () {
       if (mounted) _enterCtrl.forward();
@@ -77,6 +80,13 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
     try {
       final rooms = await _repo.getPublicRooms();
       if (mounted) setState(() => _publicRooms = rooms);
+    } catch (_) {}
+  }
+
+  Future<void> _loadMyRooms() async {
+    try {
+      final rooms = await _repo.getMyActiveRooms();
+      if (mounted) setState(() => _myRooms = rooms);
     } catch (_) {}
   }
 
@@ -161,8 +171,8 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
         context.read<GameBloc>().add(GameJoinRoom(room['id'] as String, 0));
         context.go('/room/${room['id']}');
       }
-    } catch (_) {
-      _showError('Room not found or full');
+    } catch (e) {
+      _showError(e.toString());
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -239,7 +249,9 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
             child: RefreshIndicator(
               color: AppColors.primary,
               backgroundColor: AppColors.darkCard,
-              onRefresh: _loadPublicRooms,
+              onRefresh: () async {
+                await Future.wait([_loadPublicRooms(), _loadMyRooms()]);
+              },
               child: SingleChildScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),
                 padding: const EdgeInsets.all(16),
@@ -247,7 +259,9 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     _WelcomeBanner(
-                        username: username, level: level, coins: coins, xp: xp),
+                        username: username,
+                        avatarUrl: auth is AuthAuthenticated ? auth.user.avatarUrl : null,
+                        level: level, coins: coins, xp: xp),
                     if (_compliance != null) ...[
                       const SizedBox(height: 12),
                       _ComplianceBanners(
@@ -290,6 +304,20 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
                     _JoinCodeCard(
                         ctl: _codeCtl, loading: _loading, onJoin: _joinByCode),
                     const SizedBox(height: 24),
+
+                    // ── My Active Rooms entry card ──────────────────────────
+                    if (_myRooms.isNotEmpty) ...[
+                      const _SectionLabel(
+                          title: 'My Active Rooms',
+                          icon: Icons.sports_esports_rounded),
+                      const SizedBox(height: 12),
+                      _MyRoomsEntryCard(
+                        count: _myRooms.length,
+                        onTap: () => context.go('/my-rooms'),
+                      ),
+                      const SizedBox(height: 24),
+                    ],
+
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -329,11 +357,12 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
                                     context.read<GameBloc>().add(
                                         GameJoinRoom(r['id'] as String, 0));
                                     context.go('/room/${r['id']}');
-                                  } catch (_) {
-                                    _showError('Could not join room');
+                                  } catch (e) {
+                                    _showError(e.toString());
                                   } finally {
-                                    if (mounted)
+                                    if (mounted) {
                                       setState(() => _loading = false);
+                                    }
                                   }
                                 },
                               )),
@@ -575,9 +604,11 @@ class _Banner extends StatelessWidget {
 // ── Welcome banner ──────────────────────────────────────────────────────────
 class _WelcomeBanner extends StatelessWidget {
   final String username;
+  final String? avatarUrl;
   final int level, coins, xp;
   const _WelcomeBanner(
       {required this.username,
+      this.avatarUrl,
       required this.level,
       required this.coins,
       required this.xp});
@@ -585,7 +616,6 @@ class _WelcomeBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final xpPct = (xp % 1000) / 1000.0;
-    final initial = username.isNotEmpty ? username[0].toUpperCase() : 'P';
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -617,20 +647,12 @@ class _WelcomeBanner extends StatelessWidget {
                 end: Alignment.bottomRight,
               ),
             ),
-            child: Container(
-              width: 52,
-              height: 52,
-              decoration: const BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: LinearGradient(
-                    colors: [AppColors.primary, AppColors.primaryDark]),
-              ),
-              child: Center(
-                  child: Text(initial,
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 22))),
+            child: UserAvatar(
+              username: username,
+              avatarUrl: avatarUrl,
+              size: 52,
+              gradientColors: const [AppColors.primary, AppColors.primaryDark],
+              fontSize: 22,
             ),
           ),
           const SizedBox(width: 14),
@@ -1576,6 +1598,82 @@ class _LevelOptionState extends State<_LevelOption>
       );
 }
 
+// ── My Active Rooms entry card (opens the full list page) ──────────────────
+class _MyRoomsEntryCard extends StatelessWidget {
+  final int count;
+  final VoidCallback onTap;
+  const _MyRoomsEntryCard({required this.count, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            gradient: LinearGradient(
+              colors: [
+                AppColors.primary.withValues(alpha: 0.13),
+                const Color(0xFF0A1520),
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            border: Border.all(color: AppColors.primary.withValues(alpha: 0.35)),
+            boxShadow: [
+              BoxShadow(
+                  color: AppColors.primary.withValues(alpha: 0.08),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4)),
+            ],
+          ),
+          child: Row(children: [
+            Container(
+              width: 46,
+              height: 46,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: AppColors.primary.withValues(alpha: 0.14),
+                border: Border.all(color: AppColors.primary.withValues(alpha: 0.4)),
+              ),
+              child: const Center(
+                child: Icon(Icons.sports_esports_rounded,
+                    color: AppColors.primary, size: 22),
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('My Active Rooms',
+                      style: TextStyle(
+                          color: AppColors.textPrimary,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15)),
+                  const SizedBox(height: 3),
+                  Text(
+                    '$count room${count == 1 ? '' : 's'} waiting — tap to view',
+                    style: const TextStyle(
+                        color: AppColors.textSecondary, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppColors.primary.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.arrow_forward_ios_rounded,
+                  color: AppColors.primary, size: 14),
+            ),
+          ]),
+        ),
+      );
+}
+
 // ── Room card ───────────────────────────────────────────────────────────────
 class _RoomCard extends StatelessWidget {
   final Map<String, dynamic> room;
@@ -1590,6 +1688,7 @@ class _RoomCard extends StatelessWidget {
         (num.tryParse(room['player_count']?.toString() ?? '') ?? 0).toInt();
     final isFull = count >= 4;
     final host = room['host_name'] as String? ?? 'Room';
+    final hostAvatarUrl = room['host_avatar_url'] as String?;
     final betAmount =
         (num.tryParse(room['bet_amount']?.toString() ?? '') ?? 0).toDouble();
 
@@ -1626,29 +1725,19 @@ class _RoomCard extends StatelessWidget {
           ],
         ),
         child: Row(children: [
-          Container(
-            width: 46,
-            height: 46,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: LinearGradient(
-                colors: isFull
-                    ? [AppColors.darkCard, AppColors.darkCard]
-                    : [AppColors.primary, AppColors.primaryDark],
-              ),
-              border: Border.all(
-                  color: isFull
-                      ? AppColors.darkBorder
-                      : AppColors.primary.withValues(alpha: 0.4)),
-            ),
-            child: Center(
-                child: Text(
-              host.isNotEmpty ? host[0].toUpperCase() : '?',
-              style: TextStyle(
-                  color: isFull ? AppColors.textMuted : Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18),
-            )),
+          UserAvatar(
+            username: host,
+            avatarUrl: isFull ? null : hostAvatarUrl,
+            size: 46,
+            gradientColors: isFull
+                ? [AppColors.darkCard, AppColors.darkCard]
+                : [AppColors.primary, AppColors.primaryDark],
+            border: Border.all(
+                color: isFull
+                    ? AppColors.darkBorder
+                    : AppColors.primary.withValues(alpha: 0.4)),
+            textColor: isFull ? AppColors.textMuted : Colors.white,
+            fontSize: 18,
           ),
           const SizedBox(width: 14),
           Expanded(

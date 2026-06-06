@@ -46,4 +46,9 @@ class SocialRepository {
     final res = await _api.get('/messages/unread');
     return (res.data as Map)['count'] as int? ?? 0;
   }
+
+  Future<Map<String, dynamic>> getPublicProfile(String userId) async {
+    final res = await _api.get('/users/$userId');
+    return Map<String, dynamic>.from(res.data as Map);
+  }
 }

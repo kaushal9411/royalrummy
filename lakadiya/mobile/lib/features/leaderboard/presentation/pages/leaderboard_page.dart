@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import '../../../../core/services/api_service.dart';
 import '../../../../core/services/socket_service.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/widgets/user_avatar.dart';
 
 class LeaderboardPage extends StatefulWidget {
   const LeaderboardPage({super.key});
@@ -195,9 +196,8 @@ class _LeaderboardPageState extends State<LeaderboardPage>
     const bronze = Color(0xFFCD7F32);
 
     Widget column(Map<String, dynamic> entry, int pos, double h, Color c, String medal) {
-      final name    = entry['username'] as String? ?? '?';
-      final initial = name[0].toUpperCase();
-      final wins    = toInt(entry['matches_won'], 0);
+      final name = entry['username'] as String? ?? '?';
+      final wins = toInt(entry['matches_won'], 0);
       final score   = num.tryParse(entry['total_score']?.toString() ?? '') ?? 0;
 
       return Expanded(
@@ -212,24 +212,14 @@ class _LeaderboardPageState extends State<LeaderboardPage>
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
               // Avatar
-              Container(
-                width: 52, height: 52,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                    colors: [c, c.withValues(alpha: 0.7)],
-                  ),
-                  boxShadow: [BoxShadow(
-                    color: c.withValues(alpha: 0.4),
-                    blurRadius: 12, spreadRadius: 1,
-                  )],
-                  border: Border.all(color: Colors.white.withValues(alpha: 0.15), width: 2),
-                ),
-                child: Center(
-                  child: Text(initial,
-                      style: const TextStyle(color: Colors.white,
-                          fontWeight: FontWeight.bold, fontSize: 20)),
-                ),
+              UserAvatar(
+                username: name,
+                avatarUrl: entry['avatar_url'] as String?,
+                size: 52,
+                gradientColors: [c, c.withValues(alpha: 0.7)],
+                border: Border.all(color: Colors.white.withValues(alpha: 0.15), width: 2),
+                boxShadow: [BoxShadow(color: c.withValues(alpha: 0.4), blurRadius: 12, spreadRadius: 1)],
+                fontSize: 20,
               ),
               const SizedBox(height: 4),
               Text(medal, style: const TextStyle(fontSize: 18)),
@@ -436,27 +426,16 @@ class _AnimatedLeaderRow extends StatelessWidget {
           ),
           title: Row(
             children: [
-              Container(
-                width: 38, height: 38,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                    colors: _isPodium
-                        ? [_rankColor, _rankColor.withValues(alpha: 0.6)]
-                        : [AppColors.primary, AppColors.primaryDark],
-                  ),
-                  boxShadow: _isPodium
-                      ? [BoxShadow(
-                          color: _rankColor.withValues(alpha: 0.3),
-                          blurRadius: 8,
-                        )]
-                      : null,
-                ),
-                child: Center(
-                  child: Text(username[0].toUpperCase(),
-                      style: const TextStyle(color: Colors.white,
-                          fontWeight: FontWeight.bold, fontSize: 16)),
-                ),
+              UserAvatar(
+                username: username,
+                avatarUrl: entry['avatar_url'] as String?,
+                size: 38,
+                gradientColors: _isPodium
+                    ? [_rankColor, _rankColor.withValues(alpha: 0.6)]
+                    : [AppColors.primary, AppColors.primaryDark],
+                boxShadow: _isPodium
+                    ? [BoxShadow(color: _rankColor.withValues(alpha: 0.3), blurRadius: 8)]
+                    : null,
               ),
               const SizedBox(width: 12),
               Expanded(

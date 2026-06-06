@@ -42,6 +42,7 @@ function publicState(state, forSeat) {
     ledSuit:      state.ledSuit,
     currentTrick: state.currentTrick,
     players:      state.players,
+    mySeat:       forSeat,
     hand:         state.hands[forSeat] || [],
   };
 }
@@ -236,7 +237,7 @@ function registerGameSocket(io, socket) {
   // ── Join room channel ──
   socket.on('join_room', async ({ roomId }) => {
     try {
-      const room = await query('SELECT id, status FROM rooms WHERE id = $1', [roomId]);
+      const room = await query('SELECT id, status, host_id FROM rooms WHERE id = $1', [roomId]);
       if (!room.rows.length) return socket.emit('error', { message: 'Room not found' });
 
       socket.join(roomId);
@@ -569,4 +570,4 @@ function registerGameSocket(io, socket) {
   });
 }
 
-module.exports = { registerGameSocket };
+module.exports = { registerGameSocket, userSockets };

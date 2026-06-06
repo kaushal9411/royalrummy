@@ -183,9 +183,22 @@ const searchUsers = async (currentUserId, q, limit = 30) => {
   return result.rows;
 };
 
+const getPublicProfile = async (userId) => {
+  const result = await query(
+    `SELECT u.id, u.username, u.avatar_url, u.level, u.xp,
+            ps.matches_played, ps.matches_won
+     FROM users u
+     LEFT JOIN player_stats ps ON ps.user_id = u.id
+     WHERE u.id = $1`,
+    [userId]
+  );
+  if (!result.rows.length) throw { status: 404, message: 'User not found' };
+  return result.rows[0];
+};
+
 module.exports = {
   getProfile, updateProfile, getMatchHistory,
   sendFriendRequest, acceptFriendRequest, declineFriendRequest, getPendingRequests, getFriends,
   getNotifications, markNotificationsRead,
-  searchUsers,
+  searchUsers, getPublicProfile,
 };

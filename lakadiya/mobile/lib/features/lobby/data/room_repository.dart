@@ -35,6 +35,9 @@ class RoomRepository {
   Future<void> leaveRoom(String roomId) =>
       _api.delete('/rooms/$roomId/leave');
 
+  Future<void> deleteRoom(String roomId) =>
+      _api.delete('/rooms/$roomId');
+
   Future<Map<String, dynamic>> addBot(String roomId, String level) async {
     final res = await _api.post('/rooms/$roomId/bot', data: {'level': level});
     _assertOk(res);
@@ -43,6 +46,12 @@ class RoomRepository {
 
   Future<List<Map<String, dynamic>>> getPublicRooms() async {
     final res = await _api.get('/rooms/public');
+    _assertOk(res);
+    return (res.data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  Future<List<Map<String, dynamic>>> getMyActiveRooms() async {
+    final res = await _api.get('/rooms/my');
     _assertOk(res);
     return (res.data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }

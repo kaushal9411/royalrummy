@@ -194,6 +194,26 @@ export const closeAdminRoom = async (roomId: string): Promise<void> => {
   await api.patch(`/admin/rooms/${roomId}/close`);
 };
 
+export interface AdminRoomPlayer {
+  seat:       number;
+  is_bot:     boolean;
+  bot_level:  string | null;
+  user_id:    string | null;
+  username:   string | null;
+  avatar_url: string | null;
+  level:      number;
+  is_online:  boolean;
+}
+
+export const getAdminRoomPlayers = async (roomId: string): Promise<AdminRoomPlayer[]> => {
+  const res = await api.get(`/admin/rooms/${roomId}/players`);
+  return res.data;
+};
+
+export const kickRoomPlayer = async (roomId: string, userId: string): Promise<void> => {
+  await api.delete(`/admin/rooms/${roomId}/players/${userId}`);
+};
+
 // ─── Notification types & calls ───────────────────────────────────────────────
 
 export interface NotificationLog {

@@ -111,10 +111,13 @@ const joinRoom = async (userId, code) => {
     'SELECT seat, user_id FROM room_players WHERE room_id = $1',
     [room.id]
   );
-  if (players.rows.length >= 4) throw { status: 400, message: 'Room is full' };
 
+  // alreadyIn MUST come before the full-room check: a player who navigated away
+  // without calling leaveRoom is still in room_players and should rejoin freely.
   const alreadyIn = players.rows.find((p) => p.user_id === userId);
   if (alreadyIn) return getRoomDetails(room.id);
+
+  if (players.rows.length >= 4) throw { status: 400, message: 'Room is full' };
 
   const occupiedSeats = new Set(players.rows.map((p) => p.seat));
   let seat = 0;
@@ -150,22 +153,22 @@ const getRoomDetails = async (roomId) => {
 };
 
 const leaveRoom = async (userId, roomId) => {
-  await query(
-    'DELETE FROM room_players WHERE room_id = $1 AND user_id = $2',
-    [roomId, userId]
-  );
+  const room = await query('SELECT host_id FROM rooms WHERE id = $1', [roomId]);
+  if (!room.rows.length) return;
+
+  await query('DELETE FROM room_players WHERE room_id = $1 AND user_id = $2', [roomId, userId]);
+
   const remaining = await query(
     'SELECT user_id FROM room_players WHERE room_id = $1 AND is_bot = FALSE',
     [roomId]
   );
+
   if (!remaining.rows.length) {
-    await query('UPDATE rooms SET status = $1 WHERE id = $2', ['finished', roomId]);
-  } else {
-    const room = await query('SELECT host_id FROM rooms WHERE id = $1', [roomId]);
-    if (room.rows[0].host_id === userId) {
-      const newHost = remaining.rows[0].user_id;
-      await query('UPDATE rooms SET host_id = $1 WHERE id = $2', [newHost, roomId]);
-    }
+    await query("UPDATE rooms SET status = 'finished' WHERE id = $1", [roomId]);
+  } else if (room.rows[0].host_id === userId) {
+    // Host left permanently — pass crown to next real player
+    const newHost = remaining.rows[0].user_id;
+    await query('UPDATE rooms SET host_id = $1 WHERE id = $2', [newHost, roomId]);
   }
 };
 
@@ -194,17 +197,36 @@ const addBot = async (hostId, roomId, botLevel = 'medium') => {
 const getPublicRooms = async () => {
   const result = await query(
     `SELECT r.id, r.code, r.status, r.bet_amount,
-            u.username AS host_name,
+            u.username AS host_name, u.avatar_url AS host_avatar_url,
             COUNT(rp.seat) AS player_count
      FROM rooms r
      JOIN users u ON u.id = r.host_id
      LEFT JOIN room_players rp ON rp.room_id = r.id
      WHERE r.is_private = FALSE AND r.status = 'waiting'
-     GROUP BY r.id, u.username
+     GROUP BY r.id, u.username, u.avatar_url
      HAVING COUNT(rp.seat) < 4
      ORDER BY r.created_at DESC
      LIMIT 20`,
     []
+  );
+  return result.rows;
+};
+
+const getMyActiveRooms = async (userId) => {
+  const result = await query(
+    `SELECT r.id, r.code, r.status, r.is_private, r.bet_amount, r.host_id,
+            u.username AS host_name, u.avatar_url AS host_avatar_url,
+            COUNT(rp2.seat) AS player_count
+     FROM rooms r
+     JOIN users u ON u.id = r.host_id
+     LEFT JOIN room_players rp ON rp.room_id = r.id AND rp.user_id = $1
+     LEFT JOIN room_players rp2 ON rp2.room_id = r.id
+     WHERE r.status = 'waiting'
+       AND (rp.room_id IS NOT NULL OR r.host_id = $1)
+     GROUP BY r.id, r.code, r.status, r.is_private, r.bet_amount, r.host_id, u.username, u.avatar_url
+     ORDER BY r.created_at DESC
+     LIMIT 10`,
+    [userId]
   );
   return result.rows;
 };
@@ -216,4 +238,12 @@ const resetBet = async (hostId, roomId) => {
   await query("UPDATE rooms SET bet_amount = 0 WHERE id = $1", [roomId]);
 };
 
-module.exports = { createRoom, joinRoom, getRoomDetails, leaveRoom, addBot, getPublicRooms, resetBet };
+const deleteRoom = async (userId, roomId) => {
+  const room = await query('SELECT host_id FROM rooms WHERE id = $1', [roomId]);
+  if (!room.rows.length) throw { status: 404, message: 'Room not found' };
+  if (room.rows[0].host_id !== userId) throw { status: 403, message: 'Only the host can delete the room' };
+  await query('DELETE FROM room_players WHERE room_id = $1', [roomId]);
+  await query("UPDATE rooms SET status = 'finished' WHERE id = $1", [roomId]);
+};
+
+module.exports = { createRoom, joinRoom, getRoomDetails, leaveRoom, deleteRoom, addBot, getPublicRooms, resetBet, getMyActiveRooms };

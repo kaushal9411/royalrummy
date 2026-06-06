@@ -7,6 +7,8 @@ const { getSettings, updateSettings } = require('./settings.service');
 const { listCredentials, setCredential, deleteCredential } = require('../credentials/credentials.service');
 const { approveKyc, rejectKyc, listPendingKyc } = require('../kyc/kyc.service');
 const { setSelfExclusion, updateSettings: updateRgSettings } = require('../responsible_gaming/responsible_gaming.service');
+const { userSockets } = require('../../socket/game.socket');
+const { getIO } = require('../../socket/socket.manager');
 
 router.use(authenticateAdmin);
 
@@ -163,6 +165,100 @@ router.delete('/credentials/:keyName', async (req, res, next) => {
     const deleted = await deleteCredential(req.params.keyName);
     if (!deleted) return res.status(404).json({ message: 'Credential not found' });
     res.json({ message: 'Credential deleted' });
+  } catch (e) { next(e); }
+});
+
+// ── Room management ───────────────────────────────────────────────────────────
+
+const VALID_STATUSES = ['waiting', 'playing', 'finished'];
+
+router.get('/rooms', async (req, res, next) => {
+  try {
+    const limit  = Math.min(Number(req.query.limit) || 200, 500);
+    const offset = Number(req.query.offset) || 0;
+    const status = VALID_STATUSES.includes(req.query.status) ? req.query.status : null;
+
+    const params = status ? [limit, offset, status] : [limit, offset];
+    const { rows } = await query(
+      `SELECT r.id, r.code, r.status, r.is_private, r.bet_amount, r.host_id,
+              u.username AS host_name,
+              COUNT(rp.seat)::int AS player_count,
+              r.created_at, r.started_at, r.finished_at
+       FROM rooms r
+       JOIN users u ON u.id = r.host_id
+       LEFT JOIN room_players rp ON rp.room_id = r.id
+       ${status ? 'WHERE r.status = $3' : ''}
+       GROUP BY r.id, r.code, r.status, r.is_private, r.bet_amount, r.host_id,
+                u.username, r.created_at, r.started_at, r.finished_at
+       ORDER BY r.created_at DESC
+       LIMIT $1 OFFSET $2`,
+      params,
+    );
+    const { rows: ct } = await query(
+      `SELECT COUNT(*)::int AS total FROM rooms${status ? ' WHERE status = $1' : ''}`,
+      status ? [status] : [],
+    );
+    res.json({ rooms: rows, total: ct[0].total });
+  } catch (e) { next(e); }
+});
+
+router.get('/rooms/:roomId/players', async (req, res, next) => {
+  try {
+    const { rows } = await query(
+      `SELECT rp.seat, rp.is_bot, rp.bot_level,
+              u.id AS user_id, u.username, u.avatar_url, u.level
+       FROM room_players rp
+       LEFT JOIN users u ON u.id = rp.user_id
+       WHERE rp.room_id = $1
+       ORDER BY rp.seat`,
+      [req.params.roomId],
+    );
+    const players = rows.map(p => ({
+      ...p,
+      is_online: p.is_bot ? false : userSockets.has(p.user_id),
+    }));
+    res.json(players);
+  } catch (e) { next(e); }
+});
+
+// Kick one player out of a room (removes seat, disconnects socket if online)
+router.delete('/rooms/:roomId/players/:userId', async (req, res, next) => {
+  try {
+    const { roomId, userId } = req.params;
+    await query(
+      'DELETE FROM room_players WHERE room_id = $1 AND user_id = $2',
+      [roomId, userId],
+    );
+    const socketId = userSockets.get(userId);
+    if (socketId) {
+      try { getIO().to(socketId).emit('kicked', { reason: 'Removed by admin', roomId }); } catch (_) {}
+      userSockets.delete(userId);
+    }
+    res.json({ message: 'Player kicked' });
+  } catch (e) { next(e); }
+});
+
+// Force-close a room — removes all players and marks it finished
+router.patch('/rooms/:roomId/close', async (req, res, next) => {
+  try {
+    const { roomId } = req.params;
+    const { rows } = await query(
+      'SELECT user_id FROM room_players WHERE room_id = $1 AND is_bot = FALSE',
+      [roomId],
+    );
+    await query('DELETE FROM room_players WHERE room_id = $1', [roomId]);
+    await query("UPDATE rooms SET status = 'finished' WHERE id = $1", [roomId]);
+    try {
+      const io = getIO();
+      for (const { user_id } of rows) {
+        const socketId = userSockets.get(user_id);
+        if (socketId) {
+          io.to(socketId).emit('kicked', { reason: 'Room closed by admin', roomId });
+          userSockets.delete(user_id);
+        }
+      }
+    } catch (_) {}
+    res.json({ message: 'Room closed' });
   } catch (e) { next(e); }
 });
 

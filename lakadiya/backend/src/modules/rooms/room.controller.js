@@ -26,8 +26,9 @@ const createRoom = async (req, res, next) => {
 
 const joinRoom = async (req, res, next) => {
   try {
-    // Pass betAmount=1 so limit check runs (limits are based on cumulative past spending)
-    await _checkResponsibleGaming(req.user.id, 1);
+    // Self-exclusion check only — spend-limit check runs inside the service
+    // only when the room actually has a non-zero bet amount.
+    await _checkResponsibleGaming(req.user.id, 0);
     const room = await roomService.joinRoom(req.user.id, req.params.code);
     res.json(room);
   } catch (err) { next(err); }
@@ -44,6 +45,13 @@ const leaveRoom = async (req, res, next) => {
   try {
     await roomService.leaveRoom(req.user.id, req.params.roomId);
     res.json({ message: 'Left room' });
+  } catch (err) { next(err); }
+};
+
+const deleteRoom = async (req, res, next) => {
+  try {
+    await roomService.deleteRoom(req.user.id, req.params.roomId);
+    res.json({ message: 'Room deleted' });
   } catch (err) { next(err); }
 };
 
@@ -68,4 +76,11 @@ const resetBet = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-module.exports = { createRoom, joinRoom, getRoomDetails, leaveRoom, addBot, getPublicRooms, resetBet };
+const getMyActiveRooms = async (req, res, next) => {
+  try {
+    const rooms = await roomService.getMyActiveRooms(req.user.id);
+    res.json(rooms);
+  } catch (err) { next(err); }
+};
+
+module.exports = { createRoom, joinRoom, getRoomDetails, leaveRoom, deleteRoom, addBot, getPublicRooms, resetBet, getMyActiveRooms };

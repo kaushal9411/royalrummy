@@ -1,8 +1,31 @@
 const router = require('express').Router();
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const { authenticate } = require('../../middleware/auth.middleware');
 const controller = require('./user.controller');
 const { isExcluded, checkSpendLimit } = require('../responsible_gaming/responsible_gaming.service');
 const { query } = require('../../config/database');
+
+const avatarStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(__dirname, '../../../../uploads/avatars');
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `${req.user.id}_${Date.now()}${ext}`);
+  },
+});
+const avatarUpload = multer({
+  storage: avatarStorage,
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (_, file, cb) => {
+    const allowed = ['.jpg', '.jpeg', '.png'];
+    cb(null, allowed.includes(path.extname(file.originalname).toLowerCase()));
+  },
+});
 
 router.use(authenticate);
 
@@ -95,5 +118,24 @@ router.get('/me/compliance', authenticate, async (req, res, next) => {
     });
   } catch (e) { next(e); }
 });
+
+router.post('/me/avatar', avatarUpload.single('avatar'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ message: 'No image file provided' });
+
+    // Delete previous local avatar to avoid orphaned files
+    const { rows } = await query('SELECT avatar_url FROM users WHERE id = $1', [req.user.id]);
+    const oldUrl = rows[0]?.avatar_url;
+    if (oldUrl && oldUrl.startsWith('/uploads/avatars/')) {
+      fs.unlink(path.join(__dirname, '../../../../', oldUrl), () => {});
+    }
+
+    const avatarUrl = `/uploads/avatars/${req.file.filename}`;
+    await query('UPDATE users SET avatar_url = $1 WHERE id = $2', [avatarUrl, req.user.id]);
+    res.json({ avatar_url: avatarUrl });
+  } catch (e) { next(e); }
+});
+
+router.get('/:userId', controller.getPublicProfile);
 
 module.exports = router;

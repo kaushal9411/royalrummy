@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/widgets/user_avatar.dart';
 import '../../../auth/presentation/bloc/auth_bloc.dart';
 import '../../../game/presentation/bloc/game_bloc.dart';
 import '../../data/room_repository.dart';
@@ -51,6 +52,52 @@ class _RoomPageState extends State<RoomPage> with TickerProviderStateMixin {
       final room = await _repo.getRoomDetails(widget.roomId);
       if (mounted) setState(() => _room = room);
     } catch (_) {}
+  }
+
+  Future<void> _onLeavePressed() async {
+    if (_isHost) {
+      await _showHostLeaveOptions();
+    } else {
+      await _showLeaveConfirmation();
+    }
+  }
+
+  Future<void> _showLeaveConfirmation() async {
+    final result = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => const _PlayerLeaveSheet(),
+    );
+    if (!mounted) return;
+    if (result == 'leave') {
+      // Temporary — seat preserved, can rejoin without a code.
+      if (mounted) context.go('/lobby');
+    } else if (result == 'leave_perm') {
+      await _repo.leaveRoom(widget.roomId);
+      if (mounted) context.go('/lobby');
+    }
+  }
+
+  Future<void> _showHostLeaveOptions() async {
+    final result = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => const _HostLeaveSheet(),
+    );
+    if (!mounted) return;
+    if (result == 'leave') {
+      // Temporary leave — host stays in room_players, just navigate away.
+      if (mounted) context.go('/lobby');
+    } else if (result == 'leave_perm') {
+      // Permanent leave — removes host from room_players, transfers crown.
+      await _repo.leaveRoom(widget.roomId);
+      if (mounted) context.go('/lobby');
+    } else if (result == 'delete') {
+      await _repo.deleteRoom(widget.roomId);
+      if (mounted) context.go('/lobby');
+    }
   }
 
   bool get _isHost {
@@ -155,7 +202,7 @@ class _RoomPageState extends State<RoomPage> with TickerProviderStateMixin {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, color: AppColors.textPrimary, size: 20),
-          onPressed: () => context.go('/lobby'),
+          onPressed: _onLeavePressed,
         ),
         title: const Text('Waiting Room',
             style: TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.bold)),
@@ -467,11 +514,11 @@ class _AnimatedPlayerSlot extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final filled  = player != null;
-    final isBot   = player?['is_bot'] == true;
-    final isHost  = filled && player!['user_id'] == hostId;
-    final name    = filled ? (player!['username'] as String? ?? 'Player') : null;
-    final botLvl  = player?['bot_level'] as String?;
-    final initial = name?.isNotEmpty == true ? name![0].toUpperCase() : '?';
+    final isBot     = player?['is_bot'] == true;
+    final isHost    = filled && player!['user_id'] == hostId;
+    final name      = filled ? (player!['username'] as String? ?? 'Player') : null;
+    final botLvl    = player?['bot_level'] as String?;
+    final avatarUrl = filled && !isBot ? player!['avatar_url'] as String? : null;
     final avatarColor = isBot
         ? AppColors.trump
         : [AppColors.primary, AppColors.accent, const Color(0xFF9C27B0), const Color(0xFFFF5722)][index % 4];
@@ -501,26 +548,36 @@ class _AnimatedPlayerSlot extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Container(
-              width: 44, height: 44,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: filled ? avatarColor.withValues(alpha: 0.15) : AppColors.darkBorder.withValues(alpha: 0.3),
-                border: Border.all(
-                  color: filled ? avatarColor.withValues(alpha: 0.5) : AppColors.darkBorder.withValues(alpha: 0.3),
+            if (!filled)
+              Container(
+                width: 44, height: 44,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: AppColors.darkBorder.withValues(alpha: 0.3),
+                  border: Border.all(color: AppColors.darkBorder.withValues(alpha: 0.3)),
                 ),
+                child: const Icon(Icons.person_outline_rounded, color: AppColors.textMuted, size: 22),
+              )
+            else if (isBot)
+              Container(
+                width: 44, height: 44,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: avatarColor.withValues(alpha: 0.15),
+                  border: Border.all(color: avatarColor.withValues(alpha: 0.5)),
+                ),
+                child: const Center(child: Text('🤖', style: TextStyle(fontSize: 20))),
+              )
+            else
+              UserAvatar(
+                username: name ?? '?',
+                avatarUrl: avatarUrl,
+                size: 44,
+                solidColor: avatarColor.withValues(alpha: 0.15),
+                border: Border.all(color: avatarColor.withValues(alpha: 0.5)),
+                textColor: avatarColor,
+                fontSize: 18,
               ),
-              child: Center(
-                child: filled
-                    ? Text(isBot ? '🤖' : initial,
-                        style: TextStyle(
-                          color: avatarColor,
-                          fontSize: isBot ? 20 : 18,
-                          fontWeight: FontWeight.bold,
-                        ))
-                    : const Icon(Icons.person_outline_rounded, color: AppColors.textMuted, size: 22),
-              ),
-            ),
             const SizedBox(width: 14),
             Expanded(
               child: Column(
@@ -576,6 +633,365 @@ class _AnimatedPlayerSlot extends StatelessWidget {
               ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ── Host leave / delete room bottom sheet ────────────────────────────────────
+class _PlayerLeaveSheet extends StatelessWidget {
+  const _PlayerLeaveSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(24, 16, 24, 36),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFF0E1A2C), Color(0xFF080F18)],
+        ),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        border: Border(
+          top:   BorderSide(color: Color(0xFF1E3050)),
+          left:  BorderSide(color: Color(0xFF1E3050)),
+          right: BorderSide(color: Color(0xFF1E3050)),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 40, height: 4,
+            decoration: BoxDecoration(
+              color: Colors.white24,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 22),
+
+          Container(
+            width: 60, height: 60,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: AppColors.primary.withValues(alpha: 0.1),
+              border: Border.all(color: AppColors.primary.withValues(alpha: 0.35)),
+            ),
+            child: const Center(child: Icon(Icons.meeting_room_rounded, color: AppColors.primary, size: 28)),
+          ),
+          const SizedBox(height: 14),
+
+          const Text(
+            'Leave Room?',
+            style: TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w800, fontSize: 18),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Choose how you want to leave.',
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+          ),
+          const SizedBox(height: 28),
+
+          // Leave Temporarily
+          GestureDetector(
+            onTap: () => Navigator.pop(context, 'leave'),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                color: AppColors.darkSurface,
+                border: Border.all(color: AppColors.primary.withValues(alpha: 0.4)),
+              ),
+              child: Row(children: [
+                Container(
+                  width: 42, height: 42,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: AppColors.primary.withValues(alpha: 0.12),
+                    border: Border.all(color: AppColors.primary.withValues(alpha: 0.35)),
+                  ),
+                  child: const Icon(Icons.exit_to_app_rounded, color: AppColors.primary, size: 20),
+                ),
+                const SizedBox(width: 16),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Leave Temporarily',
+                          style: TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.bold, fontSize: 15)),
+                      SizedBox(height: 2),
+                      Text('Your seat is saved. Rejoin anytime with the room code.',
+                          style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.chevron_right_rounded, color: AppColors.textMuted, size: 20),
+              ]),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Leave Permanently
+          GestureDetector(
+            onTap: () => Navigator.pop(context, 'leave_perm'),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                color: AppColors.darkSurface,
+                border: Border.all(color: Colors.orange.withValues(alpha: 0.4)),
+              ),
+              child: Row(children: [
+                Container(
+                  width: 42, height: 42,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.orange.withValues(alpha: 0.12),
+                    border: Border.all(color: Colors.orange.withValues(alpha: 0.35)),
+                  ),
+                  child: const Icon(Icons.logout_rounded, color: Colors.orange, size: 20),
+                ),
+                const SizedBox(width: 16),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Leave Permanently',
+                          style: TextStyle(color: Colors.orange, fontWeight: FontWeight.bold, fontSize: 15)),
+                      SizedBox(height: 2),
+                      Text('Your seat is freed. You will need to rejoin with the code.',
+                          style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.chevron_right_rounded, color: AppColors.textMuted, size: 20),
+              ]),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Stay button
+          GestureDetector(
+            onTap: () => Navigator.pop(context, null),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppColors.darkBorder),
+                color: Colors.transparent,
+              ),
+              child: const Text(
+                'Stay in Room',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: AppColors.textSecondary, fontWeight: FontWeight.w600, fontSize: 15),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HostLeaveSheet extends StatelessWidget {
+  const _HostLeaveSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(24, 16, 24, 36),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFF0E1A2C), Color(0xFF080F18)],
+        ),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        border: Border(
+          top:   BorderSide(color: Color(0xFF1E3050)),
+          left:  BorderSide(color: Color(0xFF1E3050)),
+          right: BorderSide(color: Color(0xFF1E3050)),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Handle
+          Container(
+            width: 40, height: 4,
+            decoration: BoxDecoration(
+              color: Colors.white24,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 22),
+
+          // Icon
+          Container(
+            width: 60, height: 60,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: AppColors.accent.withValues(alpha: 0.1),
+              border: Border.all(color: AppColors.accent.withValues(alpha: 0.35)),
+            ),
+            child: const Center(child: Text('👑', style: TextStyle(fontSize: 28))),
+          ),
+          const SizedBox(height: 14),
+
+          const Text(
+            'You are the Host',
+            style: TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w800, fontSize: 18),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'What would you like to do?',
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+          ),
+          const SizedBox(height: 28),
+
+          // Leave Room option
+          GestureDetector(
+            onTap: () => Navigator.pop(context, 'leave'),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                color: AppColors.darkSurface,
+                border: Border.all(color: AppColors.primary.withValues(alpha: 0.4)),
+              ),
+              child: Row(children: [
+                Container(
+                  width: 42, height: 42,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: AppColors.primary.withValues(alpha: 0.12),
+                    border: Border.all(color: AppColors.primary.withValues(alpha: 0.35)),
+                  ),
+                  child: const Icon(Icons.exit_to_app_rounded, color: AppColors.primary, size: 20),
+                ),
+                const SizedBox(width: 16),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Leave Temporarily',
+                          style: TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.bold, fontSize: 15)),
+                      SizedBox(height: 2),
+                      Text('You remain host. Room stays open — rejoin anytime.',
+                          style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.chevron_right_rounded, color: AppColors.textMuted, size: 20),
+              ]),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Leave Permanently option
+          GestureDetector(
+            onTap: () => Navigator.pop(context, 'leave_perm'),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                color: AppColors.darkSurface,
+                border: Border.all(color: Colors.orange.withValues(alpha: 0.4)),
+              ),
+              child: Row(children: [
+                Container(
+                  width: 42, height: 42,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.orange.withValues(alpha: 0.12),
+                    border: Border.all(color: Colors.orange.withValues(alpha: 0.35)),
+                  ),
+                  child: const Icon(Icons.logout_rounded, color: Colors.orange, size: 20),
+                ),
+                const SizedBox(width: 16),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Leave Permanently',
+                          style: TextStyle(color: Colors.orange, fontWeight: FontWeight.bold, fontSize: 15)),
+                      SizedBox(height: 2),
+                      Text('Leave the room. Crown passes to next player.',
+                          style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.chevron_right_rounded, color: AppColors.textMuted, size: 20),
+              ]),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Delete Room option
+          GestureDetector(
+            onTap: () => Navigator.pop(context, 'delete'),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                color: AppColors.darkSurface,
+                border: Border.all(color: AppColors.danger.withValues(alpha: 0.4)),
+              ),
+              child: Row(children: [
+                Container(
+                  width: 42, height: 42,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: AppColors.danger.withValues(alpha: 0.12),
+                    border: Border.all(color: AppColors.danger.withValues(alpha: 0.35)),
+                  ),
+                  child: const Icon(Icons.delete_forever_rounded, color: AppColors.danger, size: 20),
+                ),
+                const SizedBox(width: 16),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Delete Room',
+                          style: TextStyle(color: AppColors.danger, fontWeight: FontWeight.bold, fontSize: 15)),
+                      SizedBox(height: 2),
+                      Text('Closes the room for everyone permanently.',
+                          style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.chevron_right_rounded, color: AppColors.textMuted, size: 20),
+              ]),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Stay button
+          GestureDetector(
+            onTap: () => Navigator.pop(context, null),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppColors.darkBorder),
+                color: Colors.transparent,
+              ),
+              child: const Text(
+                'Stay in Room',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: AppColors.textSecondary, fontWeight: FontWeight.w600, fontSize: 15),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

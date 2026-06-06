@@ -1,6 +1,10 @@
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
+import '../../../../core/constants/app_constants.dart';
 import '../../../../core/services/api_service.dart';
 import '../../../../core/services/socket_service.dart';
 import '../../../../core/theme/app_theme.dart';
@@ -19,6 +23,9 @@ class _ProfilePageState extends State<ProfilePage>
   Map<String, dynamic>? _profile;
   List<Map<String, dynamic>> _history = [];
   bool _loading = true;
+
+  // Avatar upload
+  bool _uploadingAvatar = false;
 
   // Complete Profile form
   bool _editingProfile = false;
@@ -118,6 +125,83 @@ class _ProfilePageState extends State<ProfilePage>
           backgroundColor: Colors.red,
         ));
       }
+    }
+  }
+
+  String _fullAvatarUrl(String url) =>
+      url.startsWith('http') ? url : '${AppConstants.baseUrl}$url';
+
+  void _showAvatarPicker() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Container(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 36),
+        decoration: const BoxDecoration(
+          color: Color(0xFF0E1A2C),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          border: Border(
+            top:   BorderSide(color: Color(0xFF1E3050)),
+            left:  BorderSide(color: Color(0xFF1E3050)),
+            right: BorderSide(color: Color(0xFF1E3050)),
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 36, height: 4,
+              decoration: BoxDecoration(
+                color: Colors.white24, borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 18),
+            const Text('Update Profile Photo',
+                style: TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.bold, fontSize: 16)),
+            const SizedBox(height: 20),
+            _AvatarPickerOption(
+              icon: Icons.camera_alt_rounded,
+              label: 'Take Photo',
+              onTap: () { Navigator.pop(context); _pickAndUploadAvatar(ImageSource.camera); },
+            ),
+            const SizedBox(height: 10),
+            _AvatarPickerOption(
+              icon: Icons.photo_library_rounded,
+              label: 'Choose from Gallery',
+              onTap: () { Navigator.pop(context); _pickAndUploadAvatar(ImageSource.gallery); },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickAndUploadAvatar(ImageSource source) async {
+    final xFile = await ImagePicker().pickImage(
+      source: source, imageQuality: 85, maxWidth: 900,
+    );
+    if (xFile == null) return;
+    setState(() => _uploadingAvatar = true);
+    try {
+      final formData = FormData.fromMap({
+        'avatar': await MultipartFile.fromFile(xFile.path, filename: xFile.name),
+      });
+      final api = ApiService();
+      final res = await api.post('/users/me/avatar', data: formData);
+      final data = Map<String, dynamic>.from(res.data as Map);
+      final url = data['avatar_url'] as String?;
+      if (url != null && mounted) {
+        setState(() => _profile!['avatar_url'] = url);
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Failed to upload photo'),
+          backgroundColor: Colors.red,
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _uploadingAvatar = false);
     }
   }
 
@@ -278,12 +362,13 @@ class _ProfilePageState extends State<ProfilePage>
 
   Widget _buildHero() {
     final p = _profile!;
-    final username = p['username'] as String? ?? 'Player';
-    final email = p['email'] as String?;
-    final initial = username.isNotEmpty ? username[0].toUpperCase() : 'P';
+    final username  = p['username']   as String? ?? 'Player';
+    final email     = p['email']      as String?;
+    final avatarUrl = p['avatar_url'] as String?;
+    final initial   = username.isNotEmpty ? username[0].toUpperCase() : 'P';
     final level = _n(p['level']).toInt();
     final coins = _n(p['coins']).toInt();
-    final xp = _n(p['xp']).toInt();
+    final xp    = _n(p['xp']).toInt();
 
     return Container(
       padding: const EdgeInsets.all(24),
@@ -319,48 +404,102 @@ class _ProfilePageState extends State<ProfilePage>
           ),
           const SizedBox(height: 16),
 
-          // Avatar with animated glow ring
-          AnimatedBuilder(
-            animation: _avatarGlow,
-            builder: (_, child) => Container(
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: AppColors.primary
-                        .withValues(alpha: 0.2 + _avatarGlow.value * 0.3),
-                    blurRadius: 22 + _avatarGlow.value * 16,
-                    spreadRadius: 2,
-                  )
-                ],
-              ),
-              child: ScaleTransition(
-                scale: _avatarScale,
-                child: Container(
-                  width: 88,
-                  height: 88,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: const LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [AppColors.primary, AppColors.primaryDark],
+          // Avatar with animated glow ring + tap to change
+          GestureDetector(
+            onTap: _showAvatarPicker,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                AnimatedBuilder(
+                  animation: _avatarGlow,
+                  builder: (_, child) => Container(
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppColors.primary
+                              .withValues(alpha: 0.2 + _avatarGlow.value * 0.3),
+                          blurRadius: 22 + _avatarGlow.value * 16,
+                          spreadRadius: 2,
+                        )
+                      ],
                     ),
-                    border: Border.all(
-                      color: AppColors.primary
-                          .withValues(alpha: 0.4 + _avatarGlow.value * 0.4),
-                      width: 3,
+                    child: ScaleTransition(
+                      scale: _avatarScale,
+                      child: Container(
+                        width: 88,
+                        height: 88,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          gradient: const LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [AppColors.primary, AppColors.primaryDark],
+                          ),
+                          border: Border.all(
+                            color: AppColors.primary
+                                .withValues(alpha: 0.4 + _avatarGlow.value * 0.4),
+                            width: 3,
+                          ),
+                        ),
+                        child: ClipOval(
+                          child: _uploadingAvatar
+                              ? const Center(
+                                  child: CircularProgressIndicator(
+                                      color: Colors.white, strokeWidth: 2.5))
+                              : (avatarUrl != null
+                                  ? CachedNetworkImage(
+                                      imageUrl: _fullAvatarUrl(avatarUrl),
+                                      fit: BoxFit.cover,
+                                      placeholder: (_, __) => Center(
+                                        child: Text(initial,
+                                            style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 34,
+                                                fontWeight: FontWeight.bold)),
+                                      ),
+                                      errorWidget: (_, __, ___) => Center(
+                                        child: Text(initial,
+                                            style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 34,
+                                                fontWeight: FontWeight.bold)),
+                                      ),
+                                    )
+                                  : Center(
+                                      child: Text(initial,
+                                          style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 34,
+                                              fontWeight: FontWeight.bold)),
+                                    )),
+                        ),
+                      ),
                     ),
-                  ),
-                  child: Center(
-                    child: Text(initial,
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 34,
-                            fontWeight: FontWeight.bold)),
                   ),
                 ),
-              ),
+                // Camera badge
+                Positioned(
+                  bottom: 0,
+                  right: 0,
+                  child: Container(
+                    width: 28, height: 28,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppColors.primary,
+                      border: Border.all(color: const Color(0xFF0D2818), width: 2),
+                    ),
+                    child: _uploadingAvatar
+                        ? const Padding(
+                            padding: EdgeInsets.all(5),
+                            child: CircularProgressIndicator(
+                                color: Colors.white, strokeWidth: 2),
+                          )
+                        : const Icon(Icons.camera_alt_rounded,
+                            color: Colors.white, size: 14),
+                  ),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 14),
@@ -1188,6 +1327,47 @@ class _StatChip extends StatelessWidget {
                 style: const TextStyle(
                     color: AppColors.textSecondary, fontSize: 10)),
           ],
+        ),
+      );
+}
+
+// ── Avatar picker option row ───────────────────────────────────────────────────
+class _AvatarPickerOption extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  const _AvatarPickerOption({required this.icon, required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 18),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            color: AppColors.darkSurface,
+            border: Border.all(color: AppColors.darkBorder),
+          ),
+          child: Row(children: [
+            Container(
+              width: 38, height: 38,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: AppColors.primary.withValues(alpha: 0.12),
+                border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+              ),
+              child: Icon(icon, color: AppColors.primary, size: 18),
+            ),
+            const SizedBox(width: 14),
+            Text(label,
+                style: const TextStyle(
+                    color: AppColors.textPrimary,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14)),
+            const Spacer(),
+            const Icon(Icons.chevron_right_rounded, color: AppColors.textMuted, size: 20),
+          ]),
         ),
       );
 }

@@ -1,6 +1,9 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
-import { getAdminRooms, closeAdminRoom, type AdminRoom } from '../../lib/api';
+import {
+  getAdminRooms, closeAdminRoom, getAdminRoomPlayers, kickRoomPlayer,
+  type AdminRoom, type AdminRoomPlayer,
+} from '../../lib/api';
 import { formatDateTime } from '../../lib/utils';
 
 type Filter = '' | 'waiting' | 'playing' | 'finished';
@@ -26,7 +29,10 @@ export default function RoomsPage() {
   const [filter,  setFilter]  = useState<Filter>('');
   const [search,  setSearch]  = useState('');
   const [loading, setLoading] = useState(true);
-  const [closeTarget, setCloseTarget] = useState<AdminRoom | null>(null);
+  const [closeTarget,   setCloseTarget]   = useState<AdminRoom | null>(null);
+  const [playersRoom,   setPlayersRoom]   = useState<AdminRoom | null>(null);
+  const [players,       setPlayers]       = useState<AdminRoomPlayer[]>([]);
+  const [playersLoading, setPlayersLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
 
@@ -64,6 +70,27 @@ export default function RoomsPage() {
       load();
     } catch { showToast('Failed to close room', false); }
     finally { setBusy(false); }
+  };
+
+  const openPlayers = async (room: AdminRoom) => {
+    setPlayersRoom(room);
+    setPlayers([]);
+    setPlayersLoading(true);
+    try {
+      const data = await getAdminRoomPlayers(room.id);
+      setPlayers(data);
+    } catch { showToast('Failed to load players', false); }
+    finally { setPlayersLoading(false); }
+  };
+
+  const doKick = async (userId: string) => {
+    if (!playersRoom) return;
+    try {
+      await kickRoomPlayer(playersRoom.id, userId);
+      showToast('Player kicked');
+      setPlayers(prev => prev.filter(p => p.user_id !== userId));
+      load();
+    } catch { showToast('Failed to kick player', false); }
   };
 
   const filtered = rooms.filter(r =>
@@ -192,7 +219,8 @@ export default function RoomsPage() {
                       </div>
                     </td>
                     <td className="px-5 py-3.5">
-                      <div className="flex gap-0.5">
+                      <button onClick={() => openPlayers(room)}
+                              className="flex items-center gap-0.5 hover:opacity-80 transition-opacity group">
                         {[...Array(4)].map((_, i) => (
                           <span key={i} className={`w-4 h-4 rounded flex items-center justify-center text-xs
                                                     ${i < Number(room.player_count ?? 0)
@@ -201,8 +229,10 @@ export default function RoomsPage() {
                             ♟
                           </span>
                         ))}
-                        <span className="ml-1.5 text-gray-400 text-xs">{room.player_count ?? 0}/4</span>
-                      </div>
+                        <span className="ml-1.5 text-gray-400 text-xs group-hover:text-white transition-colors">
+                          {room.player_count ?? 0}/4
+                        </span>
+                      </button>
                     </td>
                     <td className="px-5 py-3.5">
                       {Number(room.bet_amount) > 0
@@ -253,6 +283,107 @@ export default function RoomsPage() {
                 {busy ? 'Closing…' : 'Force Close'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Players modal */}
+      {playersRoom && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+             style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)' }}
+             onClick={(e) => { if (e.target === e.currentTarget) setPlayersRoom(null); }}>
+          <div className="w-full max-w-md rounded-2xl border border-dark-border overflow-hidden" style={{ background: '#0F1420' }}>
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-dark-border">
+              <div>
+                <h3 className="text-base font-bold text-white">
+                  Room <span className="font-mono text-accent">{playersRoom.code}</span> · Players
+                </h3>
+                <p className="text-gray-500 text-xs mt-0.5">
+                  {players.filter(p => p.is_online).length} online · {players.filter(p => !p.is_online && !p.is_bot).length} offline
+                </p>
+              </div>
+              <button onClick={() => setPlayersRoom(null)}
+                      className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-500 hover:text-white hover:bg-dark-border transition-colors text-lg">
+                ×
+              </button>
+            </div>
+
+            {/* Player list */}
+            <div className="divide-y divide-dark-border">
+              {playersLoading ? (
+                [...Array(3)].map((_, i) => (
+                  <div key={i} className="flex items-center gap-3 px-5 py-3.5">
+                    <div className="w-9 h-9 rounded-full bg-dark-border animate-pulse" />
+                    <div className="flex-1 space-y-1.5">
+                      <div className="h-3.5 w-28 rounded bg-dark-border animate-pulse" />
+                      <div className="h-3 w-16 rounded bg-dark-border animate-pulse" />
+                    </div>
+                  </div>
+                ))
+              ) : players.length === 0 ? (
+                <div className="px-5 py-10 text-center text-gray-600 text-sm">No players in this room</div>
+              ) : (
+                players.map(p => (
+                  <div key={p.is_bot ? `bot-${p.seat}` : p.user_id}
+                       className="flex items-center gap-3 px-5 py-3.5 hover:bg-white/2 transition-colors">
+                    {/* Avatar */}
+                    <div className="relative flex-shrink-0">
+                      <div className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold"
+                           style={{ background: p.is_bot ? 'rgba(99,102,241,0.15)' : 'rgba(139,92,246,0.15)',
+                                    color: p.is_bot ? '#818CF8' : '#A78BFA' }}>
+                        {p.is_bot ? '🤖' : (p.username?.[0]?.toUpperCase() ?? '?')}
+                      </div>
+                      {/* Online dot */}
+                      {!p.is_bot && (
+                        <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2
+                                          ${p.is_online
+                                            ? 'bg-green-400 border-[#0F1420]'
+                                            : 'bg-gray-600 border-[#0F1420]'}`} />
+                      )}
+                    </div>
+
+                    {/* Info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-white text-sm font-medium truncate">
+                          {p.is_bot ? `Bot (${p.bot_level ?? 'medium'})` : (p.username ?? 'Unknown')}
+                        </span>
+                        {!p.is_bot && (
+                          <span className={`text-xs px-1.5 py-0.5 rounded font-semibold flex-shrink-0
+                                            ${p.is_online
+                                              ? 'bg-green-400/10 text-green-400'
+                                              : 'bg-gray-500/10 text-gray-500'}`}>
+                            {p.is_online ? 'Online' : 'Offline'}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-gray-600 text-xs">Seat {p.seat + 1}{p.is_bot ? ' · Bot' : ` · Lv ${p.level ?? 1}`}</p>
+                    </div>
+
+                    {/* Kick button — only for real (non-bot) players */}
+                    {!p.is_bot && p.user_id && (
+                      <button onClick={() => doKick(p.user_id!)}
+                              className="px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors flex-shrink-0
+                                         bg-danger/10 text-danger-light border-danger/20 hover:bg-danger/20">
+                        Kick
+                      </button>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Footer */}
+            {playersRoom.status !== 'finished' && (
+              <div className="px-5 py-4 border-t border-dark-border flex justify-end">
+                <button onClick={() => { setCloseTarget(playersRoom); setPlayersRoom(null); }}
+                        className="px-4 py-2 rounded-lg bg-danger/10 text-danger-light border border-danger/20
+                                   text-xs font-semibold hover:bg-danger/20 transition-colors">
+                  Close Entire Room
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

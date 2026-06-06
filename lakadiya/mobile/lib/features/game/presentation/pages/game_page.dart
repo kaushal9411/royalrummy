@@ -13,6 +13,7 @@ import '../../domain/entities/game_state_entity.dart';
 import '../bloc/game_bloc.dart';
 import '../widgets/card_widget.dart';
 import '../widgets/bid_dialog.dart';
+import '../../../social/data/social_repository.dart';
 
 // ── Sound helper ───────────────────────────────────────────────────────────────
 class _Sfx {
@@ -71,6 +72,12 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
   final Map<String, List<Map<String, dynamic>>> _inboxMsgs = {};
   final List<Map<String, dynamic>> _dmToasts = [];
   final List<Map<String, dynamic>> _floatingMsgs = [];
+
+  // ── Inline quick-chat (message icon tap) ──
+  int? _activeInlineSeat;
+  PlayerInfo? _activeInlinePlayer;
+  final TextEditingController _inlineChatCtl = TextEditingController();
+  final FocusNode _inlineChatFocus = FocusNode();
 
   @override
   void initState() {
@@ -196,11 +203,46 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
     _trickAnimCtrl.dispose();
     _chatInputCtl.dispose();
     _chatScrollCtl.dispose();
+    _inlineChatCtl.dispose();
+    _inlineChatFocus.dispose();
     SocketService().off('chat_message');
     SocketService().off('emoji_reaction');
     SocketService().off('private_message');
     _Sfx.cleanup();
     super.dispose();
+  }
+
+  // ── Inline quick-chat controls ─────────────────────────────────────────────
+  void _openInlineChat(PlayerInfo player, int relSeat) {
+    setState(() {
+      _activeInlineSeat   = relSeat;
+      _activeInlinePlayer = player;
+    });
+    _inlineChatCtl.clear();
+    Future.microtask(() => _inlineChatFocus.requestFocus());
+  }
+
+  void _closeInlineChat() {
+    setState(() { _activeInlineSeat = null; _activeInlinePlayer = null; });
+    _inlineChatFocus.unfocus();
+  }
+
+  void _submitInlineChat() {
+    final text = _inlineChatCtl.text.trim();
+    if (text.isNotEmpty) {
+      _sendToRoomWithFloat(_activeInlineSeat!, text);
+    }
+    _inlineChatCtl.clear();
+    _closeInlineChat();
+  }
+
+  // ── Player profile dialog ──────────────────────────────────────────────────
+  void _showPlayerProfile(BuildContext ctx, PlayerInfo player) {
+    if (player.isBot || player.userId == null) return;
+    showDialog(
+      context: ctx,
+      builder: (_) => _PlayerProfileDialog(player: player),
+    );
   }
 
   void _showBidDialog() {
@@ -271,79 +313,6 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
     ).then((_) => _chatModalSetState = null);
   }
 
-  // ── Quick message via card-click (sends to room chat) ─────────────────────
-  void _showCardQuickMsg(BuildContext ctx, PlayerInfo player, int relSeat) {
-    final ctl = TextEditingController();
-    showModalBottomSheet(
-      context: ctx,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (bCtx) => Padding(
-        padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(bCtx).bottom),
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
-          decoration: const BoxDecoration(
-            color: Color(0xFF0D1827),
-            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(children: [
-                CircleAvatar(
-                  radius: 13,
-                  backgroundColor: AppColors.primary.withValues(alpha: 0.2),
-                  child: Text(player.username[0].toUpperCase(),
-                      style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold, fontSize: 11)),
-                ),
-                const SizedBox(width: 8),
-                Text('To ${player.username}',
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
-                const Spacer(),
-                const Text('Room chat', style: TextStyle(color: Colors.white38, fontSize: 10)),
-              ]),
-              const SizedBox(height: 12),
-              TextField(
-                controller: ctl,
-                autofocus: true,
-                style: const TextStyle(color: Colors.white, fontSize: 14),
-                textInputAction: TextInputAction.send,
-                onSubmitted: (text) {
-                  if (text.trim().isEmpty) return;
-                  Navigator.pop(ctx);
-                  _sendToRoomWithFloat(relSeat, text.trim());
-                },
-                decoration: InputDecoration(
-                  hintText: 'Type a message…',
-                  hintStyle: const TextStyle(color: Colors.white38),
-                  filled: true,
-                  fillColor: const Color(0xFF0A1525),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    borderSide: BorderSide.none,
-                  ),
-                  suffixIcon: GestureDetector(
-                    onTap: () {
-                      final text = ctl.text.trim();
-                      if (text.isEmpty) return;
-                      Navigator.pop(ctx);
-                      _sendToRoomWithFloat(relSeat, text);
-                    },
-                    child: Container(
-                      margin: const EdgeInsets.all(8),
-                      decoration: const BoxDecoration(color: AppColors.primary, shape: BoxShape.circle),
-                      child: const Icon(Icons.send_rounded, color: Colors.white, size: 14),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 
   void _sendToRoomWithFloat(int relSeat, String text) {
     final msgId = DateTime.now().millisecondsSinceEpoch;
@@ -533,86 +502,24 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
               ),
             ),
           ),
+        // ── Inline quick-chat bar (message icon tap) ─────────────────────
+        if (_activeInlineSeat != null && _activeInlinePlayer != null)
+          Positioned(
+            bottom: MediaQuery.viewInsetsOf(context).bottom,
+            left: 8, right: 8,
+            child: _InlineChatBar(
+              player: _activeInlinePlayer!,
+              controller: _inlineChatCtl,
+              focusNode: _inlineChatFocus,
+              onSend: _submitInlineChat,
+              onClose: _closeInlineChat,
+            ),
+          ),
       ],
     );
   }
 
 
-  // ── Quick-DM bottom sheet ──────────────────────────────────────────────────
-  void _showQuickDmSheet(BuildContext ctx, PlayerInfo player) {
-    if (player.userId == null || player.isBot) return;
-    final ctl = TextEditingController();
-    showModalBottomSheet(
-      context: ctx,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (_) => Padding(
-        padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
-        child: Container(
-          padding: const EdgeInsets.all(16),
-          decoration: const BoxDecoration(
-            color: Color(0xFF0D1827),
-            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(children: [
-                CircleAvatar(
-                  radius: 16,
-                  backgroundColor: AppColors.primary.withValues(alpha: 0.2),
-                  child: Text(player.username[0].toUpperCase(),
-                      style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
-                ),
-                const SizedBox(width: 10),
-                Text('Message ${player.username}',
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-              ]),
-              const SizedBox(height: 12),
-              TextField(
-                controller: ctl,
-                autofocus: true,
-                style: const TextStyle(color: Colors.white),
-                onSubmitted: (text) {
-                  if (text.trim().isEmpty) return;
-                  SocketService().sendPrivateMessage(player.userId!, text.trim());
-                  Navigator.pop(ctx);
-                },
-                decoration: InputDecoration(
-                  hintText: 'Type a message…',
-                  hintStyle: const TextStyle(color: Colors.white38),
-                  filled: true,
-                  fillColor: const Color(0xFF0A1525),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide.none,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 10),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primary,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                  onPressed: () {
-                    final text = ctl.text.trim();
-                    if (text.isEmpty) return;
-                    SocketService().sendPrivateMessage(player.userId!, text);
-                    Navigator.pop(ctx);
-                  },
-                  child: const Text('Send', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 
   // ── Top row ────────────────────────────────────────────────────────────────
   Widget _buildTopRow(BuildContext ctx, GameStateEntity gs, PlayerInfo? player,
@@ -656,7 +563,7 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
               children: [
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
-                  onTap: player != null ? () => _showCardQuickMsg(ctx, player, 2) : null,
+                  onTap: player != null ? () => _showPlayerProfile(ctx, player) : null,
                   child: _CardFan(cardCount, baseRotation: math.pi),
                 ),
                 const SizedBox(width: 8),
@@ -671,7 +578,7 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
                   if (!player.isBot && player.userId != null) ...[
                     const SizedBox(width: 4),
                     GestureDetector(
-                      onTap: () => _showQuickDmSheet(ctx, player),
+                      onTap: () => _openInlineChat(player, 2),
                       child: Container(
                         width: 24, height: 24,
                         decoration: BoxDecoration(
@@ -703,7 +610,7 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
         children: [
           GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTap: player != null ? () => _showCardQuickMsg(ctx, player, isLeft ? 3 : 1) : null,
+            onTap: player != null ? () => _showPlayerProfile(ctx, player) : null,
             child: _CardFan(cardCount, baseRotation: isLeft ? -math.pi / 2 : math.pi / 2),
           ),
           const SizedBox(height: 4),
@@ -719,7 +626,7 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
             if (!player.isBot && player.userId != null) ...[
               const SizedBox(height: 4),
               GestureDetector(
-                onTap: () => _showQuickDmSheet(ctx, player),
+                onTap: () => _openInlineChat(player, isLeft ? 3 : 1),
                 child: Container(
                   width: 26, height: 22,
                   decoration: BoxDecoration(
@@ -2265,6 +2172,269 @@ class _DmToastBubble extends StatelessWidget {
       ),
     );
   }
+}
+
+// ── Inline quick-chat bar (appears above keyboard) ───────────────────────────
+class _InlineChatBar extends StatelessWidget {
+  final PlayerInfo player;
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final VoidCallback onSend;
+  final VoidCallback onClose;
+
+  const _InlineChatBar({
+    required this.player,
+    required this.controller,
+    required this.focusNode,
+    required this.onSend,
+    required this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.fromLTRB(10, 6, 6, 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0D1827),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.5)),
+        boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 12)],
+      ),
+      child: Row(children: [
+        CircleAvatar(
+          radius: 14,
+          backgroundColor: AppColors.primary.withValues(alpha: 0.2),
+          child: Text(
+            player.username[0].toUpperCase(),
+            style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold, fontSize: 12),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: TextField(
+            controller: controller,
+            focusNode: focusNode,
+            style: const TextStyle(color: Colors.white, fontSize: 13),
+            textInputAction: TextInputAction.send,
+            onSubmitted: (_) => onSend(),
+            decoration: InputDecoration(
+              hintText: '→ ${player.username}',
+              hintStyle: const TextStyle(color: Colors.white38, fontSize: 12),
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              filled: true,
+              fillColor: const Color(0xFF0A1525),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: BorderSide.none,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 6),
+        GestureDetector(
+          onTap: onSend,
+          child: Container(
+            width: 32, height: 32,
+            decoration: const BoxDecoration(color: AppColors.primary, shape: BoxShape.circle),
+            child: const Icon(Icons.send_rounded, color: Colors.white, size: 14),
+          ),
+        ),
+        GestureDetector(
+          onTap: onClose,
+          child: const Padding(
+            padding: EdgeInsets.all(8),
+            child: Icon(Icons.close_rounded, color: Colors.white54, size: 16),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+// ── Player profile dialog ─────────────────────────────────────────────────────
+class _PlayerProfileDialog extends StatefulWidget {
+  final PlayerInfo player;
+  const _PlayerProfileDialog({required this.player});
+
+  @override
+  State<_PlayerProfileDialog> createState() => _PlayerProfileDialogState();
+}
+
+class _PlayerProfileDialogState extends State<_PlayerProfileDialog> {
+  Map<String, dynamic>? _profile;
+  bool _loading = true;
+  bool _friendRequested = false;
+  bool _sendingRequest = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfile();
+  }
+
+  Future<void> _loadProfile() async {
+    try {
+      final p = await SocialRepository().getPublicProfile(widget.player.userId!);
+      if (mounted) setState(() { _profile = p; _loading = false; });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _sendFriendRequest() async {
+    if (_sendingRequest) return;
+    setState(() => _sendingRequest = true);
+    try {
+      await SocialRepository().sendFriendRequest(widget.player.userId!);
+      if (mounted) setState(() { _friendRequested = true; _sendingRequest = false; });
+    } catch (_) {
+      if (mounted) setState(() => _sendingRequest = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final level  = (_profile?['level']          as num?)?.toInt() ?? 1;
+    final xp     = (_profile?['xp']             as num?)?.toInt() ?? 0;
+    final played = (_profile?['matches_played']  as num?)?.toInt() ?? 0;
+    final won    = (_profile?['matches_won']     as num?)?.toInt() ?? 0;
+    final winPct = played > 0 ? '${((won / played) * 100).toStringAsFixed(0)}%' : '--';
+    final avatarUrl = _profile?['avatar_url'] as String?;
+
+    return Dialog(
+      backgroundColor: const Color(0xFF0D1827),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 40, vertical: 20),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Align(
+              alignment: Alignment.topRight,
+              child: GestureDetector(
+                onTap: () => Navigator.of(context).pop(),
+                child: const Icon(Icons.close_rounded, color: Colors.white54, size: 18),
+              ),
+            ),
+            const SizedBox(height: 4),
+            // Avatar + level badge
+            Stack(
+              alignment: Alignment.bottomRight,
+              children: [
+                CircleAvatar(
+                  radius: 32,
+                  backgroundColor: AppColors.primary.withValues(alpha: 0.2),
+                  backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl) : null,
+                  child: avatarUrl == null
+                      ? Text(widget.player.username[0].toUpperCase(),
+                          style: const TextStyle(color: AppColors.primary, fontSize: 24, fontWeight: FontWeight.bold))
+                      : null,
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: AppColors.accent,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text('$level',
+                      style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(widget.player.username,
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 17)),
+            const SizedBox(height: 2),
+            Text('Level $level',
+                style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+            const SizedBox(height: 14),
+            if (_loading)
+              const SizedBox(
+                width: 22, height: 22,
+                child: CircularProgressIndicator(color: AppColors.primary, strokeWidth: 2),
+              )
+            else ...[
+              // Stats row
+              Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+                _StatItem(label: 'Games', value: '$played'),
+                _StatItem(label: 'Won',   value: '$won'),
+                _StatItem(label: 'Win %', value: winPct),
+              ]),
+              const SizedBox(height: 12),
+              // XP bar
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                  const Text('XP', style: TextStyle(color: AppColors.textMuted, fontSize: 10)),
+                  Text('$xp / ${level * 500}',
+                      style: const TextStyle(color: AppColors.textMuted, fontSize: 10)),
+                ]),
+                const SizedBox(height: 4),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: (xp / (level * 500)).clamp(0.0, 1.0),
+                    backgroundColor: const Color(0xFF1A2840),
+                    valueColor: const AlwaysStoppedAnimation<Color>(AppColors.primary),
+                    minHeight: 6,
+                  ),
+                ),
+              ]),
+            ],
+            const SizedBox(height: 16),
+            // Friend request button
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _friendRequested
+                      ? AppColors.accent.withValues(alpha: 0.2)
+                      : AppColors.primary,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                ),
+                onPressed: (_friendRequested || _sendingRequest) ? null : _sendFriendRequest,
+                icon: _sendingRequest
+                    ? const SizedBox(
+                        width: 14, height: 14,
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : Icon(
+                        _friendRequested ? Icons.check_rounded : Icons.person_add_alt_1_rounded,
+                        size: 16,
+                        color: _friendRequested ? AppColors.accent : Colors.white),
+                label: Text(
+                  _friendRequested ? 'Request Sent' : 'Add Friend',
+                  style: TextStyle(
+                    color: _friendRequested ? AppColors.accent : Colors.white,
+                    fontWeight: FontWeight.bold, fontSize: 13),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StatItem extends StatelessWidget {
+  final String label;
+  final String value;
+  const _StatItem({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) => Column(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Text(value,
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+      const SizedBox(height: 2),
+      Text(label,
+          style: const TextStyle(color: AppColors.textMuted, fontSize: 10)),
+    ],
+  );
 }
 
 // ── Round result row ──────────────────────────────────────────────────────────

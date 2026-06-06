@@ -23,6 +23,7 @@ import '../../features/payments/presentation/screens/withdraw_screen.dart';
 import '../../features/profile/presentation/pages/device_token_page.dart';
 import '../../features/social/presentation/pages/social_page.dart';
 import '../../features/social/presentation/pages/dm_screen.dart';
+import '../../features/lobby/presentation/pages/my_rooms_page.dart';
 
 final _rootKey = GlobalKey<NavigatorState>();
 
@@ -49,6 +50,7 @@ GoRouter createRouter(AuthBloc authBloc, PaymentBloc paymentBloc) => GoRouter(
     GoRoute(path: '/login',    builder: (_, __) => const LoginPage()),
     GoRoute(path: '/register', redirect: (_, __) => '/login'),
     GoRoute(path: '/lobby',    builder: (_, __) => const LobbyPage()),
+    GoRoute(path: '/my-rooms', builder: (_, __) => const MyRoomsPage()),
     GoRoute(
       path: '/room/:roomId',
       builder: (_, state) => RoomPage(roomId: state.pathParameters['roomId']!),

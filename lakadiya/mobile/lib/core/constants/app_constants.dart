@@ -4,8 +4,8 @@ class AppConstants {
   static const String appName = 'Lakadiya';
 
   // API
-  static const String baseUrl = 'http://172.20.10.2:3001';
-  static const String socketUrl = 'http://172.20.10.2:3001';
+  static const String baseUrl = 'http://192.168.1.39:3001';
+  static const String socketUrl = 'http://192.168.1.39:3001';
   static const String apiVersion = '/api';
 
   // Storage keys
