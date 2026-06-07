@@ -3,7 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const path = require('path');
-const rateLimit = require('express-rate-limit');
+const { globalLimiter } = require('./middleware/rate-limit.middleware');
 
 const authRoutes = require('./modules/auth/auth.routes');
 const userRoutes = require('./modules/users/user.routes');
@@ -30,8 +30,7 @@ app.use(cors({
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true }));
 
-const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200 });
-app.use('/api', limiter);
+app.use('/api', globalLimiter);
 
 // Seed Razorpay credentials from env into encrypted DB on first boot
 autoSeedFromEnv('razorpay_key_id',     process.env.RAZORPAY_KEY_ID).catch(() => {});

@@ -95,10 +95,14 @@ GoRouter createRouter(AuthBloc authBloc, PaymentBloc paymentBloc) => GoRouter(
     ),
     GoRoute(
       path: '/dm/:userId',
-      builder: (_, state) => DmScreen(
-        userId: state.pathParameters['userId']!,
-        username: state.extra as String? ?? 'Player',
-      ),
+      builder: (_, state) {
+        final extra = state.extra as Map<String, dynamic>? ?? {};
+        return DmScreen(
+          userId: state.pathParameters['userId']!,
+          username: extra['username'] as String? ?? 'Player',
+          avatarUrl: extra['avatar_url'] as String?,
+        );
+      },
     ),
 
     // ── Compliance & Settings ──────────────────────────────────────────────

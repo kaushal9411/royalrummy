@@ -60,7 +60,15 @@ const sendMessage = async (req, res, next) => {
 
 const markRead = async (req, res, next) => {
   try {
-    await service.markRead(req.user.id, req.params.userId);
+    const { userId } = req.params; // sender whose messages we're marking read
+    await service.markRead(req.user.id, userId);
+
+    // Notify sender that their messages have been read (enables double-blue tick)
+    try {
+      const io = getIO();
+      io.to(`user:${userId}`).emit('messages_read', { byUserId: req.user.id });
+    } catch (_) {}
+
     res.json({ ok: true });
   } catch (err) { next(err); }
 };

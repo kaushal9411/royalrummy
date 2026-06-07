@@ -40,6 +40,11 @@ class SocialRepository {
     return (res.data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
+  Future<Map<String, dynamic>> sendMessage(String userId, String text) async {
+    final res = await _api.post('/messages/$userId', data: {'text': text});
+    return Map<String, dynamic>.from(res.data as Map);
+  }
+
   Future<void> markRead(String userId) => _api.patch('/messages/$userId/read');
 
   Future<int> getUnreadCount() async {

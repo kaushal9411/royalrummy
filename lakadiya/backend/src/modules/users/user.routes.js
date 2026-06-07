@@ -119,7 +119,9 @@ router.get('/me/compliance', authenticate, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-router.post('/me/avatar', avatarUpload.single('avatar'), async (req, res, next) => {
+const { uploadLimiter } = require('../../middleware/rate-limit.middleware');
+
+router.post('/me/avatar', uploadLimiter, avatarUpload.single('avatar'), async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ message: 'No image file provided' });
 

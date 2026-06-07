@@ -24,6 +24,7 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
   List<Map<String, dynamic>> _publicRooms = [];
   List<Map<String, dynamic>> _myRooms = [];
   Map<String, dynamic>? _compliance;
+  String? _avatarUrl; // Fresh avatar URL from API
 
   late final AnimationController _enterCtrl;
   late final AnimationController _pulseCtrl;
@@ -41,6 +42,7 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
     _loadPublicRooms();
     _loadMyRooms();
     _loadCompliance();
+    _loadUserAvatar(); // Fetch fresh avatar from API
     Future.delayed(const Duration(milliseconds: 80), () {
       if (mounted) _enterCtrl.forward();
     });
@@ -53,6 +55,14 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
     try {
       final res = await ApiService().get('/users/me/compliance');
       if (mounted) setState(() => _compliance = Map<String, dynamic>.from(res.data as Map));
+    } catch (_) {}
+  }
+
+  Future<void> _loadUserAvatar() async {
+    try {
+      final res = await ApiService().get('/users/me');
+      final avatarUrl = res.data['avatar_url'] as String?;
+      if (mounted) setState(() => _avatarUrl = avatarUrl);
     } catch (_) {}
   }
 
@@ -260,7 +270,7 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
                   children: [
                     _WelcomeBanner(
                         username: username,
-                        avatarUrl: auth is AuthAuthenticated ? auth.user.avatarUrl : null,
+                        avatarUrl: _avatarUrl ?? (auth is AuthAuthenticated ? auth.user.avatarUrl : null),
                         level: level, coins: coins, xp: xp),
                     if (_compliance != null) ...[
                       const SizedBox(height: 12),
@@ -647,12 +657,14 @@ class _WelcomeBanner extends StatelessWidget {
                 end: Alignment.bottomRight,
               ),
             ),
-            child: UserAvatar(
-              username: username,
-              avatarUrl: avatarUrl,
-              size: 52,
-              gradientColors: const [AppColors.primary, AppColors.primaryDark],
-              fontSize: 22,
+            child: ClipOval(
+              child: UserAvatar(
+                username: username,
+                avatarUrl: avatarUrl,
+                size: 52,
+                gradientColors: avatarUrl != null ? null : const [AppColors.primary, AppColors.primaryDark],
+                fontSize: 22,
+              ),
             ),
           ),
           const SizedBox(width: 14),

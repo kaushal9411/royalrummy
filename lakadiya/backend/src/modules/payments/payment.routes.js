@@ -1,17 +1,18 @@
 const express = require('express');
 const paymentController = require('./payment.controller');
 const { authenticate, authenticateAdmin } = require('../../middleware/auth.middleware');
+const { paymentLimiter } = require('../../middleware/rate-limit.middleware');
 
 const router = express.Router();
 
 // User routes (require auth)
 router.use(authenticate);
 
-// Initiate payment order
-router.post('/initiate', paymentController.initiateAddMoney);
+// Initiate payment order — throttled per user
+router.post('/initiate', paymentLimiter, paymentController.initiateAddMoney);
 
-// Verify payment
-router.post('/verify', paymentController.verifyPayment);
+// Verify payment — throttled per user
+router.post('/verify', paymentLimiter, paymentController.verifyPayment);
 
 // Get wallet balance
 router.get('/balance', paymentController.getWalletBalance);

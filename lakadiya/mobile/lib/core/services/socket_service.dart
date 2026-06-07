@@ -47,6 +47,11 @@ class SocketService {
 
   void off(String event) => _socket?.off(event);
 
+  /// Removes a specific listener. Always prefer this over [off] when multiple
+  /// screens may register the same event (prevents removing other screens' callbacks).
+  void offCallback(String event, SocketCallback callback) =>
+      _socket?.off(event, callback);
+
   void joinRoom(String roomId) => emit('join_room', {'roomId': roomId});
 
   void startGame(String roomId) => emit('start_game', {'roomId': roomId});

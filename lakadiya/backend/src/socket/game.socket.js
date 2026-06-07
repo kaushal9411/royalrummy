@@ -15,6 +15,34 @@ const userSockets = new Map(); // userId => socketId
 // Personal room name — MUST match the format used in socket.manager.js: user:{userId}
 const userRoom = (userId) => `user:${userId}`;
 
+// ── Socket-level message throttle ─────────────────────────────────────────────
+// Tracks per-socket: last send timestamp + rolling 60-second window count.
+const _msgThrottle = new Map(); // socketId → { lastMs, windowStart, count }
+
+const _envInt = (k, d) => { const v = parseInt(process.env[k], 10); return Number.isFinite(v) && v > 0 ? v : d; };
+const THROTTLE_MIN_GAP_MS = _envInt('SOCKET_MSG_GAP_MS',   500); // SOCKET_MSG_GAP_MS=500
+const THROTTLE_WINDOW_MS  = _envInt('SOCKET_MSG_WINDOW_MS', 60_000);
+const THROTTLE_WINDOW_MAX = _envInt('SOCKET_MSG_MAX',        60); // SOCKET_MSG_MAX=60
+
+function _isSocketThrottled(socketId) {
+  const now = Date.now();
+  const t   = _msgThrottle.get(socketId) || { lastMs: 0, windowStart: now, count: 0 };
+
+  // Per-message gap check
+  if (now - t.lastMs < THROTTLE_MIN_GAP_MS) return true;
+
+  // Rolling window reset
+  if (now - t.windowStart > THROTTLE_WINDOW_MS) {
+    t.windowStart = now;
+    t.count       = 0;
+  }
+
+  t.count++;
+  t.lastMs = now;
+  _msgThrottle.set(socketId, t);
+  return t.count > THROTTLE_WINDOW_MAX;
+}
+
 const BOT_DELAY_MS = 1200; // simulate bot thinking
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -461,6 +489,10 @@ function registerGameSocket(io, socket) {
   // ── Direct message between users ──
   socket.on('private_message', async ({ toUserId, text }) => {
     if (!text?.trim() || !toUserId) return;
+    if (_isSocketThrottled(socket.id)) {
+      socket.emit('error', { message: 'Sending too fast. Please slow down.' });
+      return;
+    }
     try {
       const msgService = require('../modules/messages/message.service');
       const { sendNotification } = require('../modules/notifications/notification.service');
@@ -558,6 +590,7 @@ function registerGameSocket(io, socket) {
 
   socket.on('disconnect', () => {
     userSockets.delete(userId);
+    _msgThrottle.delete(socket.id); // clean up throttle state
     if (socket.roomId) {
       io.to(socket.roomId).emit('player_disconnected', { userId, username: socket.username });
       // If game was never started (no active state), refund any escrowed bets

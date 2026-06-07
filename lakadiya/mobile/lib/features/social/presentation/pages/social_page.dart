@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/services/socket_service.dart';
+import '../../../../core/services/storage_service.dart';
+import '../../../../core/widgets/user_avatar.dart';
 import '../../data/social_repository.dart';
 
 class SocialPage extends StatefulWidget {
@@ -25,21 +27,30 @@ class _SocialPageState extends State<SocialPage>
   int  _totalUnread = 0;
   bool _loading = true;
 
+  // Stored so we only remove OUR listeners in dispose, not other screens'
+  late final SocketCallback _msgCb;
+  late final SocketCallback _inviteCb;
+  late final SocketCallback _friendCb;
+
+  String _myId = '';
+
   @override
   void initState() {
     super.initState();
+    _myId = StorageService.getUser()?['id'] as String? ?? '';
     _tabs = TabController(length: 4, vsync: this);
     _tabs.addListener(() {
       if (!mounted) return;
       setState(() {});
-      // Refresh conversation list + unread count whenever Messages tab is opened
       if (_tabs.index == 3) _loadConvos();
     });
+    _msgCb    = _onIncomingMessage;
+    _inviteCb = _onGameInvite;
+    _friendCb = _onFriendRequest;
+    SocketService().on('private_message', _msgCb);
+    SocketService().on('game_invite',     _inviteCb);
+    SocketService().on('friend_request',  _friendCb);
     _load();
-
-    SocketService().on('private_message', _onIncomingMessage);
-    SocketService().on('game_invite', _onGameInvite);
-    SocketService().on('friend_request', _onFriendRequest);
   }
 
   @override
@@ -47,9 +58,9 @@ class _SocialPageState extends State<SocialPage>
     _tabs.dispose();
     _searchCtl.dispose();
     _debounce?.cancel();
-    SocketService().off('private_message');
-    SocketService().off('game_invite');
-    SocketService().off('friend_request');
+    SocketService().offCallback('private_message', _msgCb);
+    SocketService().offCallback('game_invite',     _inviteCb);
+    SocketService().offCallback('friend_request',  _friendCb);
     super.dispose();
   }
 
@@ -78,7 +89,6 @@ class _SocialPageState extends State<SocialPage>
     }
   }
 
-  // Refresh only conversations + total unread (called when Messages tab opens or DM closes)
   Future<void> _loadConvos() async {
     try {
       final results = await Future.wait([
@@ -109,7 +119,7 @@ class _SocialPageState extends State<SocialPage>
 
   void _onIncomingMessage(dynamic data) {
     if (!mounted) return;
-    _loadConvos(); // refresh conversation list + unread badge
+    _loadConvos();
   }
 
   void _onGameInvite(dynamic data) {
@@ -152,9 +162,10 @@ class _SocialPageState extends State<SocialPage>
   }
 
   void _openDm(Map<String, dynamic> user) {
-    // push keeps the Social page alive; when DM screen pops, we reload convos
-    context.push('/dm/${user['id']}', extra: user['username'] ?? 'Player')
-        .then((_) { if (mounted) _loadConvos(); });
+    context.push('/dm/${user['id']}', extra: {
+      'username': user['username'] ?? 'Player',
+      'avatar_url': user['avatar_url'],
+    }).then((_) { if (mounted) _loadConvos(); });
   }
 
   void _sendInvite(Map<String, dynamic> user) {
@@ -195,16 +206,16 @@ class _SocialPageState extends State<SocialPage>
   void _acceptFriendRequest(Map<String, dynamic> request) async {
     try {
       await _repo.acceptFriendRequest(request['from_user_id']);
-      if (mounted) {
-        await _load();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Friend request accepted!'),
-            backgroundColor: AppColors.primary,
-            duration: Duration(seconds: 2),
-          ),
-        );
-      }
+      if (!mounted) return;
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Friend request accepted!'),
+          backgroundColor: AppColors.primary,
+          duration: Duration(seconds: 2),
+        ),
+      );
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -321,7 +332,7 @@ class _SocialPageState extends State<SocialPage>
                       _PlayersList(players: _players, onDm: _openDm, onInvite: _sendFriendRequest, isFriendsTab: false),
                       _PlayersList(players: _friends, onDm: _openDm, onInvite: _sendInvite, isFriendsTab: true),
                       _PendingRequestsList(requests: _pendingRequests, onAccept: _acceptFriendRequest, onDecline: _declineFriendRequest),
-                      _ConvoList(convos: _convos, onOpen: _openDm),
+                      _ConvoList(convos: _convos, onOpen: _openDm, myId: _myId),
                     ],
                   ),
           ),
@@ -330,8 +341,6 @@ class _SocialPageState extends State<SocialPage>
     );
   }
 }
-
-// ── Players list ─────────────────────────────────────────────────────────────
 
 class _PlayersList extends StatelessWidget {
   final List<Map<String, dynamic>> players;
@@ -344,8 +353,7 @@ class _PlayersList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (players.isEmpty) {
-      return const Center(
-        child: Text('No players found', style: TextStyle(color: Colors.white38)));
+      return const Center(child: Text('No players found', style: TextStyle(color: Colors.white38)));
     }
     return ListView.builder(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -366,6 +374,7 @@ class _PlayerCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final level = player['level'] ?? 1;
+    final username = player['username'] as String? ?? 'Player';
     final avatar = player['avatar_url'] as String?;
 
     return Container(
@@ -378,44 +387,36 @@ class _PlayerCard extends StatelessWidget {
       ),
       child: Row(
         children: [
-          // Avatar
-          CircleAvatar(
-            radius: 24,
-            backgroundColor: AppColors.primary.withValues(alpha: 0.2),
-            backgroundImage: avatar != null ? NetworkImage(avatar) : null,
-            child: avatar == null
-                ? Text(
-                    (player['username'] as String? ?? 'P')[0].toUpperCase(),
-                    style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold),
-                  )
-                : null,
+          UserAvatar(
+            username: username,
+            avatarUrl: avatar,
+            size: 48,
+            solidColor: AppColors.primary.withValues(alpha: 0.2),
+            textColor: AppColors.primary,
+            fontSize: 18,
           ),
           const SizedBox(width: 12),
-          // Info
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(player['username'] ?? 'Player',
+                Text(username,
                     style: const TextStyle(
                         color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
                 const SizedBox(height: 2),
-                Row(children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: AppColors.accent.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text('Lv.$level',
-                        style: const TextStyle(
-                            color: AppColors.accent, fontSize: 11, fontWeight: FontWeight.bold)),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: AppColors.accent.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
                   ),
-                ]),
+                  child: Text('Lv.$level',
+                      style: const TextStyle(
+                          color: AppColors.accent, fontSize: 11, fontWeight: FontWeight.bold)),
+                ),
               ],
             ),
           ),
-          // Actions
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -438,31 +439,26 @@ class _PlayerCard extends StatelessWidget {
   }
 }
 
-// ── Pending Requests list ────────────────────────────────────────────────────
-
 class _PendingRequestsList extends StatelessWidget {
   final List<Map<String, dynamic>> requests;
   final void Function(Map<String, dynamic>) onAccept;
   final void Function(Map<String, dynamic>) onDecline;
 
-  const _PendingRequestsList({
-    required this.requests,
-    required this.onAccept,
-    required this.onDecline,
-  });
+  const _PendingRequestsList({required this.requests, required this.onAccept, required this.onDecline});
 
   @override
   Widget build(BuildContext context) {
     if (requests.isEmpty) {
-      return const Center(
-        child: Text('No pending requests', style: TextStyle(color: Colors.white38)));
+      return const Center(child: Text('No pending requests', style: TextStyle(color: Colors.white38)));
     }
     return ListView.builder(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       itemCount: requests.length,
       itemBuilder: (_, i) {
         final req = requests[i];
-        final avatar = req['from_user_avatar'] as String?;
+        final fromUsername = req['from_user_name'] as String? ?? 'Player';
+        final fromAvatar = req['from_user_avatar'] as String?;
+        
         return Container(
           margin: const EdgeInsets.only(bottom: 10),
           padding: const EdgeInsets.all(12),
@@ -473,23 +469,20 @@ class _PendingRequestsList extends StatelessWidget {
           ),
           child: Row(
             children: [
-              CircleAvatar(
-                radius: 24,
-                backgroundColor: AppColors.primary.withValues(alpha: 0.2),
-                backgroundImage: avatar != null ? NetworkImage(avatar) : null,
-                child: avatar == null
-                    ? Text(
-                        (req['from_user_name'] as String? ?? 'P')[0].toUpperCase(),
-                        style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold),
-                      )
-                    : null,
+              UserAvatar(
+                username: fromUsername,
+                avatarUrl: fromAvatar,
+                size: 48,
+                solidColor: AppColors.primary.withValues(alpha: 0.2),
+                textColor: AppColors.primary,
+                fontSize: 18,
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(req['from_user_name'] ?? 'Player',
+                    Text(fromUsername,
                         style: const TextStyle(
                             color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
                     const SizedBox(height: 4),
@@ -522,32 +515,55 @@ class _PendingRequestsList extends StatelessWidget {
   }
 }
 
-// ── Conversations list ────────────────────────────────────────────────────────
-
 class _ConvoList extends StatelessWidget {
   final List<Map<String, dynamic>> convos;
   final void Function(Map<String, dynamic>) onOpen;
+  final String myId;
 
-  const _ConvoList({required this.convos, required this.onOpen});
+  const _ConvoList({required this.convos, required this.onOpen, required this.myId});
+
+  String _fmtTime(String? iso) {
+    if (iso == null) return '';
+    try {
+      final dt  = DateTime.parse(iso).toLocal();
+      final now = DateTime.now();
+      if (dt.year == now.year && dt.month == now.month && dt.day == now.day) {
+        return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+      }
+      if (now.difference(dt).inDays < 7) {
+        const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+        return days[dt.weekday - 1];
+      }
+      return '${dt.day}/${dt.month}';
+    } catch (_) {
+      return '';
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     if (convos.isEmpty) {
-      return const Center(
-        child: Text('No conversations yet', style: TextStyle(color: Colors.white38)));
+      return const Center(child: Text('No conversations yet', style: TextStyle(color: Colors.white38)));
     }
     return ListView.builder(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       itemCount: convos.length,
       itemBuilder: (_, i) {
-        final c = convos[i];
-        final unread = (c['unread_count'] as int?) ?? 0;
-        final avatar = c['other_avatar'] as String?;
+        final c          = convos[i];
+        final unread     = (c['unread_count'] as int?) ?? 0;
+        final otherName  = c['other_name'] as String? ?? 'Player';
+        final otherAvatar = c['other_avatar'] as String?;
+        final timeLabel  = _fmtTime(c['last_at'] as String?);
+        final isMine     = (c['last_sender_id'] as String?) == myId;
+        final preview    = isMine
+            ? 'You: ${c['last_text'] ?? ''}'
+            : (c['last_text'] as String? ?? '');
+
         return GestureDetector(
           onTap: () => onOpen({
             'id': c['other_id'],
-            'username': c['other_name'],
-            'avatar_url': c['other_avatar'],
+            'username': otherName,
+            'avatar_url': otherAvatar,
           }),
           child: Container(
             margin: const EdgeInsets.only(bottom: 10),
@@ -563,60 +579,97 @@ class _ConvoList extends StatelessWidget {
             ),
             child: Row(
               children: [
+                // Avatar with unread badge
                 Stack(
                   children: [
-                    CircleAvatar(
-                      radius: 24,
-                      backgroundColor: AppColors.primary.withValues(alpha: 0.2),
-                      backgroundImage: avatar != null ? NetworkImage(avatar) : null,
-                      child: avatar == null
-                          ? Text(
-                              (c['other_name'] as String? ?? 'P')[0].toUpperCase(),
-                              style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold),
-                            )
-                          : null,
+                    UserAvatar(
+                      username: otherName,
+                      avatarUrl: otherAvatar,
+                      size: 48,
+                      solidColor: AppColors.primary.withValues(alpha: 0.2),
+                      textColor: AppColors.primary,
+                      fontSize: 18,
                     ),
                     if (unread > 0)
                       Positioned(
                         right: 0, top: 0,
                         child: Container(
-                          width: 16, height: 16,
+                          width: 18, height: 18,
                           decoration: const BoxDecoration(
                             color: AppColors.danger,
                             shape: BoxShape.circle,
                           ),
                           child: Center(
-                            child: Text('$unread',
-                                style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold)),
+                            child: Text(
+                              unread > 9 ? '9+' : '$unread',
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.bold),
+                            ),
                           ),
                         ),
                       ),
                   ],
                 ),
                 const SizedBox(width: 12),
+                // Name + preview
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(c['other_name'] ?? 'Player',
+                      Text(otherName,
                           style: TextStyle(
                             color: Colors.white,
-                            fontWeight: unread > 0 ? FontWeight.bold : FontWeight.normal,
+                            fontWeight: unread > 0
+                                ? FontWeight.bold
+                                : FontWeight.normal,
                             fontSize: 14,
                           )),
-                      const SizedBox(height: 2),
-                      Text(c['last_text'] ?? '',
-                          style: TextStyle(
-                            color: unread > 0 ? Colors.white70 : Colors.white38,
-                            fontSize: 12,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis),
+                      const SizedBox(height: 3),
+                      Text(
+                        preview,
+                        style: TextStyle(
+                          color:
+                              unread > 0 ? Colors.white70 : Colors.white38,
+                          fontSize: 12,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ],
                   ),
                 ),
-                if (unread > 0)
-                  const Icon(Icons.chevron_right_rounded, color: AppColors.primary),
+                // Time + unread pill
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(timeLabel,
+                        style: TextStyle(
+                          color: unread > 0
+                              ? AppColors.primary
+                              : Colors.white30,
+                          fontSize: 11,
+                        )),
+                    if (unread > 0) const SizedBox(height: 4),
+                    if (unread > 0)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: AppColors.primary,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          unread > 9 ? '9+' : '$unread',
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -625,8 +678,6 @@ class _ConvoList extends StatelessWidget {
     );
   }
 }
-
-// ── Shared icon button ────────────────────────────────────────────────────────
 
 class _IconBtn extends StatelessWidget {
   final IconData icon;
