@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
 import { getMatches, AdminMatch } from '../../lib/api';
+import MatchDetailModal from '../../components/MatchDetailModal';
 import { format } from 'date-fns';
 
 const STATUSES = ['', 'active', 'completed', 'abandoned'];
@@ -11,6 +12,7 @@ export default function MatchesPage() {
   const [page, setPage]       = useState(1);
   const [status, setStatus]   = useState('');
   const [loading, setLoading] = useState(true);
+  const [viewMatchId, setViewMatchId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -53,7 +55,7 @@ export default function MatchesPage() {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-dark-border text-gray-400 text-left">
-              {['Room', 'Players', 'Status', 'Winner', 'Started', 'Duration', ''].map((h) => (
+              {['Room', 'Players', 'Status', 'Winner', 'Started', 'Duration', 'Action'].map((h) => (
                 <th key={h} className="px-4 py-3 font-medium">{h}</th>
               ))}
             </tr>
@@ -84,7 +86,11 @@ export default function MatchesPage() {
                       {duration != null ? `${duration}m` : '—'}
                     </td>
                     <td className="px-4 py-3">
-                      <span className="text-xs text-gray-500 font-mono">{m.id.slice(0, 8)}…</span>
+                      <button onClick={() => setViewMatchId(m.id)}
+                              className="px-2.5 py-1 rounded-lg bg-primary/10 text-primary-light border border-primary/20
+                                         text-xs font-semibold hover:bg-primary/20 transition-colors">
+                        View
+                      </button>
                     </td>
                   </tr>
                 );
@@ -103,6 +109,10 @@ export default function MatchesPage() {
             className="btn-primary disabled:opacity-40 text-xs py-1 px-3">Next</button>
         </div>
       </div>
+
+      {viewMatchId && (
+        <MatchDetailModal matchId={viewMatchId} onClose={() => setViewMatchId(null)} />
+      )}
     </div>
   );
 }

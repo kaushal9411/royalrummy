@@ -313,6 +313,15 @@ function registerGameSocket(io, socket) {
       const state = gameStates.get(roomId);
       if (state) {
         const seat = state.players.findIndex((p) => p.userId === userId);
+        // A previously-abandoned player came back → reclaim their seat and
+        // tell the host so the "add a bot" prompt can stop.
+        if (seat !== -1 && state.players[seat].left) {
+          state.players[seat].left = false;
+          gameStates.set(roomId, state);
+          io.to(roomId).emit('player_rejoined_game', {
+            seat, userId, username: socket.username,
+          });
+        }
         socket.emit('game_state_sync', publicState(state, seat));
       }
 

@@ -91,6 +91,51 @@ router.get('/matches', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Full match detail — meta + player-wise breakdown (score, position, winnings)
+router.get('/matches/:matchId', async (req, res, next) => {
+  try {
+    const { matchId } = req.params;
+    const metaRes = await query(
+      `SELECT m.id, m.status, m.created_at, m.finished_at, m.winner_id, m.total_rounds,
+              r.id AS room_id, r.code AS room_code, r.bet_amount, r.is_private,
+              wu.username AS winner_name,
+              (SELECT COALESCE(SUM(amount), 0)::float FROM game_bets WHERE match_id = m.id) AS total_pot
+       FROM matches m
+       JOIN rooms r ON r.id = m.room_id
+       LEFT JOIN users wu ON wu.id = m.winner_id
+       WHERE m.id = $1`,
+      [matchId],
+    );
+    if (!metaRes.rows.length) return res.status(404).json({ message: 'Match not found' });
+    const meta = metaRes.rows[0];
+
+    const playersRes = await query(
+      `SELECT mp.seat, mp.user_id, mp.is_bot, mp.final_score::float AS final_score,
+              u.username, u.avatar_url, u.level
+       FROM match_players mp
+       LEFT JOIN users u ON u.id = mp.user_id
+       WHERE mp.match_id = $1
+       ORDER BY mp.final_score DESC, mp.seat`,
+      [matchId],
+    );
+
+    const players = playersRes.rows.map((p, i) => ({
+      seat:        p.seat,
+      user_id:     p.user_id,
+      is_bot:      p.is_bot,
+      name:        p.is_bot ? 'Bot' : (p.username || 'Unknown'),
+      avatar_url:  p.is_bot ? null : p.avatar_url,
+      level:       p.level,
+      final_score: p.final_score,
+      position:    i + 1,                 // 1 = highest score = winner
+      is_winner:   i === 0,
+      won_amount:  (i === 0 && !p.is_bot && meta.total_pot > 0) ? meta.total_pot : 0,
+    }));
+
+    res.json({ match: meta, players });
+  } catch (e) { next(e); }
+});
+
 router.get('/analytics', async (req, res, next) => {
   try { res.json(await service.getAnalytics()); } catch (e) { next(e); }
 });
@@ -193,14 +238,39 @@ router.get('/rooms', async (req, res, next) => {
     const { rows } = await query(
       `SELECT r.id, r.code, r.status, r.is_private, r.bet_amount, r.host_id,
               u.username AS host_name,
-              COUNT(rp.seat)::int AS player_count,
-              r.created_at, r.started_at, r.finished_at
+              r.created_at,
+              -- live player count
+              (SELECT COUNT(*) FROM room_players rp WHERE rp.room_id = r.id)::int AS player_count,
+              -- ordered list of player names (bots labelled)
+              (SELECT COALESCE(json_agg(
+                        json_build_object(
+                          'name',  CASE WHEN rp.is_bot
+                                        THEN 'Bot (' || COALESCE(rp.bot_level,'medium') || ')'
+                                        ELSE pu.username END,
+                          'is_bot', rp.is_bot,
+                          'seat',   rp.seat
+                        ) ORDER BY rp.seat), '[]'::json)
+               FROM room_players rp
+               LEFT JOIN users pu ON pu.id = rp.user_id
+               WHERE rp.room_id = r.id) AS players,
+              -- winner + amount won + match id (latest match for this room)
+              m.match_id,
+              m.winner_name,
+              m.won_amount
        FROM rooms r
        JOIN users u ON u.id = r.host_id
-       LEFT JOIN room_players rp ON rp.room_id = r.id
+       LEFT JOIN LATERAL (
+         SELECT mm.id AS match_id,
+                wu.username AS winner_name,
+                (SELECT COALESCE(SUM(gb.amount), 0)::float
+                   FROM game_bets gb WHERE gb.match_id = mm.id) AS won_amount
+         FROM matches mm
+         LEFT JOIN users wu ON wu.id = mm.winner_id
+         WHERE mm.room_id = r.id
+         ORDER BY mm.created_at DESC
+         LIMIT 1
+       ) m ON TRUE
        ${status ? 'WHERE r.status = $3' : ''}
-       GROUP BY r.id, r.code, r.status, r.is_private, r.bet_amount, r.host_id,
-                u.username, r.created_at, r.started_at, r.finished_at
        ORDER BY r.created_at DESC
        LIMIT $1 OFFSET $2`,
       params,
@@ -270,6 +340,30 @@ router.patch('/rooms/:roomId/close', async (req, res, next) => {
       }
     } catch (_) {}
     res.json({ message: 'Room closed' });
+  } catch (e) { next(e); }
+});
+
+// Hard-delete a room — kicks everyone and removes the room (cascades players/match)
+router.delete('/rooms/:roomId', async (req, res, next) => {
+  try {
+    const { roomId } = req.params;
+    const { rows } = await query(
+      'SELECT user_id FROM room_players WHERE room_id = $1 AND is_bot = FALSE',
+      [roomId],
+    );
+    try {
+      const io = getIO();
+      for (const { user_id } of rows) {
+        const socketId = userSockets.get(user_id);
+        if (socketId) {
+          io.to(socketId).emit('kicked', { reason: 'Room deleted by admin', roomId });
+          userSockets.delete(user_id);
+        }
+      }
+      io.emit('lobby_updated');
+    } catch (_) {}
+    await query('DELETE FROM rooms WHERE id = $1', [roomId]); // FK cascade clears the rest
+    res.json({ message: 'Room deleted' });
   } catch (e) { next(e); }
 });
 

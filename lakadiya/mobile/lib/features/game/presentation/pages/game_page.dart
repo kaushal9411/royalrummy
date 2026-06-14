@@ -8,6 +8,7 @@ import 'package:audioplayers/audioplayers.dart';
 import '../../../auth/presentation/bloc/auth_bloc.dart';
 import '../../../../core/services/socket_service.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/widgets/user_avatar.dart';
 import '../../domain/entities/card_entity.dart';
 import '../../domain/entities/game_state_entity.dart';
 import '../bloc/game_bloc.dart';
@@ -63,6 +64,11 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
   bool _bidDialogOpen = false;
   bool _roundResultDialogOpen = false;
   bool _addBotDialogOpen = false;
+  int? _addBotDialogSeat;
+  // Seats whose player left and are awaiting host action (add bot / wait).
+  final Set<int> _abandonedSeats = {};
+  final Map<int, String> _abandonedNames = {};
+  final Map<int, Timer> _rePromptTimers = {};
 
   // Responsible gaming: show a reminder every 30 minutes of continuous play
   Timer? _reminderTimer;
@@ -107,6 +113,7 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
     SocketService().on('game_dm', _onGameDm);
     SocketService().on('player_left_game', _onPlayerLeftGame);
     SocketService().on('player_replaced_by_bot', _onPlayerReplacedByBot);
+    SocketService().on('player_rejoined_game', _onPlayerRejoinedGame);
 
     final authState = context.read<AuthBloc>().state;
     if (authState is AuthAuthenticated) {
@@ -264,6 +271,9 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
     final hostId   = d['hostId'] as String?;
     if (seat == null) return;
 
+    _abandonedSeats.add(seat);
+    _abandonedNames[seat] = username;
+
     // Notify everyone.
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
@@ -282,12 +292,9 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
   void _onPlayerReplacedByBot(dynamic data) {
     if (!mounted) return;
     final d = Map<String, dynamic>.from(data as Map);
+    final seat = (d['seat'] as num?)?.toInt();
     final name = d['username'] as String? ?? 'A bot';
-    // Dismiss the host prompt if it's still open, then confirm to everyone.
-    if (_addBotDialogOpen) {
-      Navigator.of(context, rootNavigator: true).pop();
-      _addBotDialogOpen = false;
-    }
+    if (seat != null) _resolveAbandonedSeat(seat);
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
       ..showSnackBar(SnackBar(
@@ -297,9 +304,39 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
       ));
   }
 
+  // The left player came back → stop pestering the host to add a bot.
+  void _onPlayerRejoinedGame(dynamic data) {
+    if (!mounted) return;
+    final d = Map<String, dynamic>.from(data as Map);
+    final seat     = (d['seat'] as num?)?.toInt();
+    final username = d['username'] as String? ?? 'A player';
+    if (seat == null) return;
+    _resolveAbandonedSeat(seat);
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(
+        content: Text('$username is back in the game'),
+        backgroundColor: AppColors.primary,
+        duration: const Duration(seconds: 2),
+      ));
+  }
+
+  // Clears all tracking for a seat and closes the prompt if it's showing for it.
+  void _resolveAbandonedSeat(int seat) {
+    _abandonedSeats.remove(seat);
+    _abandonedNames.remove(seat);
+    _rePromptTimers.remove(seat)?.cancel();
+    if (_addBotDialogOpen && _addBotDialogSeat == seat) {
+      Navigator.of(context, rootNavigator: true).pop();
+      _addBotDialogOpen = false;
+      _addBotDialogSeat = null;
+    }
+  }
+
   void _showAddBotPrompt(int seat, String username) {
     if (_addBotDialogOpen) return;
     _addBotDialogOpen = true;
+    _addBotDialogSeat = seat;
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -312,18 +349,26 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
         title: const Text('Player left',
             style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 17)),
         content: Text(
-          '$username left the game. Add a Medium bot to take their seat and continue from here?',
+          '$username left the game. Add a Medium bot to take their seat and continue, '
+          'or wait — we\'ll ask again in 10s if they don\'t return.',
           style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.4),
         ),
         actions: [
           TextButton(
-            onPressed: () { _addBotDialogOpen = false; Navigator.of(dctx).pop(); },
+            onPressed: () {
+              _addBotDialogOpen = false;
+              _addBotDialogSeat = null;
+              Navigator.of(dctx).pop();
+              _scheduleRePrompt(seat); // ask again in 10s if still gone
+            },
             child: const Text('Wait', style: TextStyle(color: Colors.white38)),
           ),
           ElevatedButton.icon(
             style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
             onPressed: () {
               _addBotDialogOpen = false;
+              _addBotDialogSeat = null;
+              _resolveAbandonedSeat(seat);
               Navigator.of(dctx).pop();
               SocketService().replaceWithBot(widget.roomId, seat);
             },
@@ -332,7 +377,18 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
           ),
         ],
       ),
-    );
+    ).then((_) => _addBotDialogOpen = false);
+  }
+
+  // Re-ask the host after 10s if the seat is still abandoned (no bot, not back).
+  void _scheduleRePrompt(int seat) {
+    _rePromptTimers.remove(seat)?.cancel();
+    _rePromptTimers[seat] = Timer(const Duration(seconds: 10), () {
+      if (!mounted) return;
+      if (_abandonedSeats.contains(seat) && !_addBotDialogOpen) {
+        _showAddBotPrompt(seat, _abandonedNames[seat] ?? 'A player');
+      }
+    });
   }
 
   // ── Leaving an active game ──────────────────────────────────────────────────
@@ -400,6 +456,8 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
     SocketService().off('game_dm');
     SocketService().off('player_left_game');
     SocketService().off('player_replaced_by_bot');
+    SocketService().off('player_rejoined_game');
+    for (final t in _rePromptTimers.values) { t.cancel(); }
     _Sfx.cleanup();
     super.dispose();
   }
@@ -2883,14 +2941,13 @@ class _PlayerProfileDialogState extends State<_PlayerProfileDialog> {
             Stack(
               alignment: Alignment.bottomRight,
               children: [
-                CircleAvatar(
-                  radius: 32,
-                  backgroundColor: AppColors.primary.withValues(alpha: 0.2),
-                  backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl) : null,
-                  child: avatarUrl == null
-                      ? Text(widget.player.username[0].toUpperCase(),
-                          style: const TextStyle(color: AppColors.primary, fontSize: 24, fontWeight: FontWeight.bold))
-                      : null,
+                UserAvatar(
+                  username: widget.player.username,
+                  avatarUrl: avatarUrl,
+                  size: 64,
+                  solidColor: AppColors.primary.withValues(alpha: 0.2),
+                  textColor: AppColors.primary,
+                  fontSize: 24,
                 ),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),

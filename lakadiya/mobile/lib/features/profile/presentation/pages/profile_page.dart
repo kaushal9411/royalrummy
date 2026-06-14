@@ -8,6 +8,7 @@ import '../../../../core/constants/app_constants.dart';
 import '../../../../core/services/api_service.dart';
 import '../../../../core/services/socket_service.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/widgets/avatar_viewer.dart';
 import '../../../../core/utils/auth_guard.dart';
 import '../../../auth/presentation/bloc/auth_bloc.dart';
 import '../../../payments/presentation/bloc/payment_bloc.dart';
@@ -404,9 +405,9 @@ class _ProfilePageState extends State<ProfilePage>
           ),
           const SizedBox(height: 16),
 
-          // Avatar with animated glow ring + tap to change
+          // Avatar — tap the picture to view it big, tap the camera badge to change
           GestureDetector(
-            onTap: _showAvatarPicker,
+            onTap: () => showAvatarViewer(context, avatarUrl: avatarUrl, username: username),
             child: Stack(
               clipBehavior: Clip.none,
               children: [
@@ -478,25 +479,28 @@ class _ProfilePageState extends State<ProfilePage>
                     ),
                   ),
                 ),
-                // Camera badge
+                // Camera badge — tap to change the photo
                 Positioned(
                   bottom: 0,
                   right: 0,
-                  child: Container(
-                    width: 28, height: 28,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: AppColors.primary,
-                      border: Border.all(color: const Color(0xFF0D2818), width: 2),
+                  child: GestureDetector(
+                    onTap: _showAvatarPicker,
+                    child: Container(
+                      width: 28, height: 28,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: AppColors.primary,
+                        border: Border.all(color: const Color(0xFF0D2818), width: 2),
+                      ),
+                      child: _uploadingAvatar
+                          ? const Padding(
+                              padding: EdgeInsets.all(5),
+                              child: CircularProgressIndicator(
+                                  color: Colors.white, strokeWidth: 2),
+                            )
+                          : const Icon(Icons.camera_alt_rounded,
+                              color: Colors.white, size: 14),
                     ),
-                    child: _uploadingAvatar
-                        ? const Padding(
-                            padding: EdgeInsets.all(5),
-                            child: CircularProgressIndicator(
-                                color: Colors.white, strokeWidth: 2),
-                          )
-                        : const Icon(Icons.camera_alt_rounded,
-                            color: Colors.white, size: 14),
                   ),
                 ),
               ],

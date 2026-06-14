@@ -2,6 +2,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import '../constants/app_constants.dart';
 import '../theme/app_theme.dart';
+import 'avatar_viewer.dart';
 
 /// Reusable circular avatar that shows the uploaded photo when available,
 /// falling back to the first letter of [username] on a gradient/solid background.
@@ -19,6 +20,11 @@ class UserAvatar extends StatelessWidget {
   final BoxBorder? border;
   final List<BoxShadow>? boxShadow;
 
+  /// Tap the avatar to open a fullscreen, zoomable view. On by default so the
+  /// behaviour is consistent everywhere; pass false where a parent already
+  /// handles the avatar tap.
+  final bool tapToView;
+
   const UserAvatar({
     super.key,
     required this.username,
@@ -30,6 +36,7 @@ class UserAvatar extends StatelessWidget {
     this.fontSize,
     this.border,
     this.boxShadow,
+    this.tapToView = true,
   });
 
   String _fullUrl(String url) =>
@@ -46,7 +53,7 @@ class UserAvatar extends StatelessWidget {
               color: textColor, fontSize: fSize, fontWeight: FontWeight.bold)),
     );
 
-    return Container(
+    final avatar = Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
@@ -70,6 +77,12 @@ class UserAvatar extends StatelessWidget {
               )
             : fallback,
       ),
+    );
+
+    if (!tapToView) return avatar;
+    return GestureDetector(
+      onTap: () => showAvatarViewer(context, avatarUrl: avatarUrl, username: username),
+      child: avatar,
     );
   }
 }

@@ -1,9 +1,10 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
 import {
-  getAdminRooms, closeAdminRoom, getAdminRoomPlayers, kickRoomPlayer,
+  getAdminRooms, deleteAdminRoom, getAdminRoomPlayers, kickRoomPlayer,
   type AdminRoom, type AdminRoomPlayer,
 } from '../../lib/api';
+import MatchDetailModal from '../../components/MatchDetailModal';
 import { formatDateTime } from '../../lib/utils';
 
 type Filter = '' | 'waiting' | 'playing' | 'finished';
@@ -29,7 +30,8 @@ export default function RoomsPage() {
   const [filter,  setFilter]  = useState<Filter>('');
   const [search,  setSearch]  = useState('');
   const [loading, setLoading] = useState(true);
-  const [closeTarget,   setCloseTarget]   = useState<AdminRoom | null>(null);
+  const [deleteTarget,  setDeleteTarget]  = useState<AdminRoom | null>(null);
+  const [viewMatchId,   setViewMatchId]   = useState<string | null>(null);
   const [playersRoom,   setPlayersRoom]   = useState<AdminRoom | null>(null);
   const [players,       setPlayers]       = useState<AdminRoomPlayer[]>([]);
   const [playersLoading, setPlayersLoading] = useState(false);
@@ -60,16 +62,22 @@ export default function RoomsPage() {
     return () => clearInterval(id);
   }, [load]);
 
-  const doClose = async () => {
-    if (!closeTarget) return;
+  const doDelete = async () => {
+    if (!deleteTarget) return;
     setBusy(true);
     try {
-      await closeAdminRoom(closeTarget.id);
-      showToast(`Room ${closeTarget.code} closed`);
-      setCloseTarget(null);
+      await deleteAdminRoom(deleteTarget.id);
+      showToast(`Room ${deleteTarget.code} deleted`);
+      setDeleteTarget(null);
       load();
-    } catch { showToast('Failed to close room', false); }
+    } catch { showToast('Failed to delete room', false); }
     finally { setBusy(false); }
+  };
+
+  const viewRoom = (room: AdminRoom) => {
+    // Show full match breakdown if the room has played; else its current roster.
+    if (room.match_id) setViewMatchId(room.match_id);
+    else openPlayers(room);
   };
 
   const openPlayers = async (room: AdminRoom) => {
@@ -180,7 +188,7 @@ export default function RoomsPage() {
           <table className="w-full text-sm">
             <thead>
               <tr style={{ background: '#0B0F1A' }}>
-                {['Code', 'Host', 'Players', 'Bet', 'Type', 'Status', 'Created', 'Actions'].map(h => (
+                {['Code', 'Host', 'Players', 'Bet', 'Type', 'Status', 'Winner / Won', 'Created', 'Actions'].map(h => (
                   <th key={h} className="px-5 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>
                 ))}
               </tr>
@@ -188,7 +196,7 @@ export default function RoomsPage() {
             <tbody className="divide-y divide-dark-border">
               {loading ? (
                 [...Array(6)].map((_, i) => (
-                  <tr key={i}>{[...Array(8)].map((__, j) => (
+                  <tr key={i}>{[...Array(9)].map((__, j) => (
                     <td key={j} className="px-5 py-4">
                       <div className="h-4 rounded bg-dark-border animate-pulse" style={{ width: `${50 + (j * 13) % 35}%` }} />
                     </td>
@@ -196,7 +204,7 @@ export default function RoomsPage() {
                 ))
               ) : filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-5 py-16 text-center">
+                  <td colSpan={9} className="px-5 py-16 text-center">
                     <div className="flex flex-col items-center gap-3 text-gray-600">
                       <span className="text-4xl">🎮</span>
                       <p>{search ? 'No rooms match your search' : 'No rooms found'}</p>
@@ -220,17 +228,27 @@ export default function RoomsPage() {
                     </td>
                     <td className="px-5 py-3.5">
                       <button onClick={() => openPlayers(room)}
-                              className="flex items-center gap-0.5 hover:opacity-80 transition-opacity group">
-                        {[...Array(4)].map((_, i) => (
-                          <span key={i} className={`w-4 h-4 rounded flex items-center justify-center text-xs
-                                                    ${i < Number(room.player_count ?? 0)
-                                                      ? 'bg-primary/30 text-primary-light'
-                                                      : 'bg-dark-border text-gray-600'}`}>
-                            ♟
-                          </span>
-                        ))}
-                        <span className="ml-1.5 text-gray-400 text-xs group-hover:text-white transition-colors">
-                          {room.player_count ?? 0}/4
+                              className="text-left hover:opacity-90 transition-opacity group max-w-[230px]">
+                        <div className="flex flex-wrap gap-1 items-center">
+                          {(room.players ?? []).length === 0 ? (
+                            <span className="text-gray-600 text-xs">Empty</span>
+                          ) : (
+                            <>
+                              {(room.players ?? []).slice(0, 3).map((p, i) => (
+                                <span key={i}
+                                      className={`px-1.5 py-0.5 rounded text-[11px] font-medium truncate max-w-[90px]
+                                                  ${p.is_bot ? 'bg-indigo-500/10 text-indigo-300' : 'bg-primary/10 text-primary-light'}`}>
+                                  {p.is_bot ? '🤖 Bot' : p.name}
+                                </span>
+                              ))}
+                              {(room.players?.length ?? 0) > 3 && (
+                                <span className="text-gray-500 text-[11px]">+{(room.players!.length - 3)}</span>
+                              )}
+                            </>
+                          )}
+                        </div>
+                        <span className="text-gray-600 text-[10px] group-hover:text-gray-400 transition-colors">
+                          {room.player_count ?? 0}/4 · view details
                         </span>
                       </button>
                     </td>
@@ -245,15 +263,36 @@ export default function RoomsPage() {
                       </span>
                     </td>
                     <td className="px-5 py-3.5"><RoomStatusBadge status={room.status} /></td>
+                    <td className="px-5 py-3.5">
+                      {room.winner_name ? (
+                        <div className="flex flex-col leading-tight">
+                          <span className="text-white text-sm font-medium flex items-center gap-1">
+                            🏆 {room.winner_name}
+                          </span>
+                          {Number(room.won_amount) > 0 && (
+                            <span className="text-accent text-xs font-bold">won ₹{Number(room.won_amount).toFixed(0)}</span>
+                          )}
+                        </div>
+                      ) : room.status === 'finished' ? (
+                        <span className="text-gray-600 text-xs">No winner</span>
+                      ) : (
+                        <span className="text-gray-600 text-xs">—</span>
+                      )}
+                    </td>
                     <td className="px-5 py-3.5 text-gray-500 text-xs">{formatDateTime(room.created_at)}</td>
                     <td className="px-5 py-3.5">
-                      {room.status !== 'finished' ? (
-                        <button onClick={() => setCloseTarget(room)}
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => viewRoom(room)}
+                                className="px-2.5 py-1 rounded-lg bg-primary/10 text-primary-light border border-primary/20
+                                           text-xs font-semibold hover:bg-primary/20 transition-colors">
+                          View
+                        </button>
+                        <button onClick={() => setDeleteTarget(room)}
                                 className="px-2.5 py-1 rounded-lg bg-danger/10 text-danger-light border border-danger/20
                                            text-xs font-semibold hover:bg-danger/20 transition-colors">
-                          Close
+                          Delete
                         </button>
-                      ) : <span className="text-gray-600 text-xs">—</span>}
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -263,28 +302,33 @@ export default function RoomsPage() {
         </div>
       </div>
 
-      {/* Close room modal */}
-      {closeTarget && (
+      {/* Delete room modal */}
+      {deleteTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
              style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)' }}>
           <div className="w-full max-w-sm rounded-2xl border border-dark-border p-6" style={{ background: '#0F1420' }}>
-            <h3 className="text-lg font-bold text-white mb-2">Close Room</h3>
+            <h3 className="text-lg font-bold text-white mb-2">Delete Room</h3>
             <p className="text-gray-400 text-sm mb-5">
-              Force-close room <span className="text-accent font-bold font-mono">{closeTarget.code}</span>?
-              All players will be removed.
+              Permanently delete room <span className="text-accent font-bold font-mono">{deleteTarget.code}</span>?
+              Any players will be removed and this can’t be undone.
             </p>
             <div className="flex gap-3">
-              <button onClick={() => setCloseTarget(null)}
+              <button onClick={() => setDeleteTarget(null)}
                       className="flex-1 px-4 py-2 rounded-lg border border-dark-border text-gray-300 text-sm hover:bg-dark-border/50 transition-colors">
                 Cancel
               </button>
-              <button onClick={doClose} disabled={busy}
+              <button onClick={doDelete} disabled={busy}
                       className="flex-1 px-4 py-2 rounded-lg bg-danger text-white text-sm font-semibold hover:opacity-90 disabled:opacity-50 transition-colors">
-                {busy ? 'Closing…' : 'Force Close'}
+                {busy ? 'Deleting…' : 'Delete Room'}
               </button>
             </div>
           </div>
         </div>
+      )}
+
+      {/* Match detail modal (room View) */}
+      {viewMatchId && (
+        <MatchDetailModal matchId={viewMatchId} onClose={() => setViewMatchId(null)} />
       )}
 
       {/* Players modal */}
@@ -375,15 +419,13 @@ export default function RoomsPage() {
             </div>
 
             {/* Footer */}
-            {playersRoom.status !== 'finished' && (
-              <div className="px-5 py-4 border-t border-dark-border flex justify-end">
-                <button onClick={() => { setCloseTarget(playersRoom); setPlayersRoom(null); }}
-                        className="px-4 py-2 rounded-lg bg-danger/10 text-danger-light border border-danger/20
-                                   text-xs font-semibold hover:bg-danger/20 transition-colors">
-                  Close Entire Room
-                </button>
-              </div>
-            )}
+            <div className="px-5 py-4 border-t border-dark-border flex justify-end">
+              <button onClick={() => { setDeleteTarget(playersRoom); setPlayersRoom(null); }}
+                      className="px-4 py-2 rounded-lg bg-danger/10 text-danger-light border border-danger/20
+                                 text-xs font-semibold hover:bg-danger/20 transition-colors">
+                Delete Room
+              </button>
+            </div>
           </div>
         </div>
       )}

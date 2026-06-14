@@ -142,6 +142,38 @@ export interface AdminMatch {
   room_code: string; winner_name: string | null; player_count: number;
 }
 
+export interface AdminMatchPlayer {
+  seat:        number;
+  user_id:     string | null;
+  is_bot:      boolean;
+  name:        string;
+  avatar_url:  string | null;
+  level:       number | null;
+  final_score: number;
+  position:    number;
+  is_winner:   boolean;
+  won_amount:  number;
+}
+
+export interface AdminMatchDetail {
+  match: {
+    id: string; status: string; created_at: string; finished_at: string | null;
+    winner_id: string | null; winner_name: string | null; total_rounds: number;
+    room_id: string; room_code: string; bet_amount: number; is_private: boolean;
+    total_pot: number;
+  };
+  players: AdminMatchPlayer[];
+}
+
+export const getAdminMatchDetail = async (matchId: string): Promise<AdminMatchDetail> => {
+  const res = await api.get(`/admin/matches/${matchId}`);
+  return res.data;
+};
+
+export const deleteAdminRoom = async (roomId: string): Promise<void> => {
+  await api.delete(`/admin/rooms/${roomId}`);
+};
+
 export interface Analytics {
   matchesByDay:       { date: string; matches: number }[];
   registrationsByDay: { date: string; users: number }[];
@@ -169,6 +201,12 @@ export const getDashboardStats = async (): Promise<DashboardStats> => {
 
 // ─── Room types & calls ───────────────────────────────────────────────────────
 
+export interface AdminRoomPlayerName {
+  name:   string;
+  is_bot: boolean;
+  seat:   number;
+}
+
 export interface AdminRoom {
   id:           string;
   code:         string;
@@ -178,9 +216,11 @@ export interface AdminRoom {
   host_id:      string;
   host_name:    string;
   player_count: number;
+  players:      AdminRoomPlayerName[];
+  match_id:     string | null;
+  winner_name:  string | null;
+  won_amount:   number | null;
   created_at:   string;
-  started_at:   string | null;
-  finished_at:  string | null;
 }
 
 export const getAdminRooms = async (params?: {
