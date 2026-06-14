@@ -21,6 +21,9 @@ class ApiService {
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
+        // Bypass the ngrok free-tier browser-warning interstitial (harmless on
+        // non-ngrok hosts). Remove together with the ngrok URL in AppConstants.
+        'ngrok-skip-browser-warning': 'true',
       },
       validateStatus: (status) => status != null && status < 500,
     ));

@@ -71,6 +71,11 @@ class FcmService {
   FcmService._();
   static final FcmService instance = FcmService._();
 
+  /// userId of the DM conversation currently open on screen (null if none).
+  /// While set, incoming MESSAGE_RECEIVED pushes from that sender skip the
+  /// banner — the user is already reading that chat in the foreground.
+  static String? activeDmUserId;
+
   String? _token;
   String? get token => _token;
 
@@ -191,6 +196,8 @@ class FcmService {
     }
 
     if (type == 'MESSAGE_RECEIVED') {
+      // Skip the banner if the user is already viewing this exact conversation.
+      if (data['senderId'] != null && data['senderId'] == activeDmUserId) return;
       _showMessageNotification(
         senderName: data['senderName'] ?? data['title'] ?? 'New message',
         text:       data['messageText'] ?? data['body'] ?? '',

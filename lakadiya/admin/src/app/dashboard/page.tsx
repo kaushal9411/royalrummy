@@ -4,7 +4,7 @@ import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis,
   Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts';
-import { getDashboard, getPaymentStats, getAnalytics, type Analytics } from '../../lib/api';
+import { getDashboard, getPaymentStats, getAnalytics, type Analytics, type PaymentStats } from '../../lib/api';
 import { formatCurrency, formatNumber } from '../../lib/utils';
 import { format } from 'date-fns';
 
@@ -69,7 +69,7 @@ const ChartTooltipStyle = {
 
 export default function DashboardPage() {
   const [stats,  setStats]  = useState<Stats | null>(null);
-  const [pstats, setPstats] = useState<{ total_revenue: number; today_revenue: number; pending_count: number } | null>(null);
+  const [pstats, setPstats] = useState<PaymentStats | null>(null);
   const [charts, setCharts] = useState<Analytics | null>(null);
   const [loading, setLoading] = useState(true);
   const [time, setTime] = useState('');

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../../../core/services/api_service.dart';
+import '../../../../core/services/fcm_service.dart';
 import '../../../../core/services/socket_service.dart';
 import '../../../../core/services/storage_service.dart';
 import '../../../../core/theme/app_theme.dart';
@@ -53,6 +54,9 @@ class _DmScreenState extends State<DmScreen> {
     // Read from Hive first (sync, fast). If null, _resolveMyId() fetches from API.
     _myId = StorageService.getUser()?['id']?.toString();
 
+    // Suppress FCM banners for this conversation while it's on screen.
+    FcmService.activeDmUserId = widget.userId;
+
     _msgCb  = _onSocketMessage;
     _readCb = _onSocketRead;
     SocketService().on('private_message', _msgCb);
@@ -94,6 +98,10 @@ class _DmScreenState extends State<DmScreen> {
 
   @override
   void dispose() {
+    // Clear only if it's still pointing at us (guards against a newer screen).
+    if (FcmService.activeDmUserId == widget.userId) {
+      FcmService.activeDmUserId = null;
+    }
     SocketService().offCallback('private_message', _msgCb);
     SocketService().offCallback('messages_read',   _readCb);
     _scroll.removeListener(_scrollListener);

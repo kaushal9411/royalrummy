@@ -26,3 +26,8 @@
 
 # Hive local storage
 -keep class com.hivedb.** { *; }
+
+# Google Play Core — Flutter references these for deferred components / split
+# installs, but the Play Core lib isn't bundled. R8 fails without these rules.
+-dontwarn com.google.android.play.core.**
+-keep class com.google.android.play.core.** { *; }
