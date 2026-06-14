@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../core/services/api_service.dart';
 import '../../../../core/services/app_settings_service.dart';
+import '../../../../core/services/socket_service.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/widgets/user_avatar.dart';
 import '../../../auth/presentation/bloc/auth_bloc.dart';
@@ -30,6 +31,9 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
   late final AnimationController _pulseCtrl;
   late final Animation<double> _fadeIn;
 
+  // Stored so we remove only OUR listener in dispose.
+  late final SocketCallback _lobbyCb;
+
   @override
   void initState() {
     super.initState();
@@ -43,6 +47,15 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
     _loadMyRooms();
     _loadCompliance();
     _loadUserAvatar(); // Fetch fresh avatar from API
+
+    // Auto-refresh the open-rooms list when any room is created/joined/left.
+    _lobbyCb = (_) {
+      if (!mounted) return;
+      _loadPublicRooms();
+      _loadMyRooms();
+    };
+    SocketService().on('lobby_updated', _lobbyCb);
+
     Future.delayed(const Duration(milliseconds: 80), () {
       if (mounted) _enterCtrl.forward();
     });
@@ -80,6 +93,7 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    SocketService().offCallback('lobby_updated', _lobbyCb);
     _enterCtrl.dispose();
     _pulseCtrl.dispose();
     _codeCtl.dispose();

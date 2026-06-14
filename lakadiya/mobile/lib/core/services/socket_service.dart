@@ -12,14 +12,34 @@ class SocketService {
   IO.Socket? _socket;
   bool get isConnected => _socket?.connected ?? false;
 
+  /// The token the live socket authenticated with. Lets us detect an account
+  /// switch and rebuild the socket so it never acts as a previous user.
+  String? _authedToken;
+
+  /// The room this client should be a member of. Server-side room membership
+  /// is per-connection and is dropped on every reconnect, so we re-join it on
+  /// each (re)connect. Set via [joinRoom], cleared via [leaveCurrentRoom].
+  String? _currentRoomId;
+  String? get currentRoomId => _currentRoomId;
+
   void connect() {
+    final token = StorageService.getToken();
+    if (token == null) return;
+
+    // Account switched (a new user logged in on this device): the existing
+    // socket is still authenticated as the OLD user. Tear it down so we
+    // reconnect with the current token. Without this the backend sees actions
+    // (e.g. start_game) as the previous account → "Only host can start", etc.
+    if (_socket != null && _authedToken != token) {
+      reset();
+    }
+
     if (_socket != null) {
       if (!_socket!.connected) _socket!.connect();
       return;
     }
-    final token = StorageService.getToken();
-    if (token == null) return;
 
+    _authedToken = token;
     _socket = IO.io(
       AppConstants.socketUrl,
       IO.OptionBuilder()
@@ -27,12 +47,18 @@ class SocketService {
           .setAuth({'token': token})
           .enableAutoConnect()
           .enableReconnection()
-          .setReconnectionAttempts(5)
-          .setReconnectionDelay(2000)
+          .setReconnectionAttempts(999) // survive ngrok / network blips
+          .setReconnectionDelay(1500)
           .build(),
     );
 
-    _socket!.onConnect((_) => _log('Connected'));
+    _socket!.onConnect((_) {
+      _log('Connected');
+      // Re-join the active room on every (re)connect — membership is lost when
+      // the underlying connection drops, which silently breaks io.to(room).
+      final rid = _currentRoomId;
+      if (rid != null) _socket!.emit('join_room', {'roomId': rid});
+    });
     _socket!.onDisconnect((_) => _log('Disconnected'));
     _socket!.onConnectError((e) => _log('Connect error: $e'));
     _socket!.connect();
@@ -47,6 +73,8 @@ class SocketService {
     _socket?.disconnect();
     _socket?.destroy();
     _socket = null;
+    _authedToken   = null;
+    _currentRoomId = null;
   }
 
   void emit(String event, [dynamic data]) => _socket?.emit(event, data);
@@ -61,9 +89,28 @@ class SocketService {
   void offCallback(String event, SocketCallback callback) =>
       _socket?.off(event, callback);
 
-  void joinRoom(String roomId) => emit('join_room', {'roomId': roomId});
+  void joinRoom(String roomId) {
+    _currentRoomId = roomId;
+    emit('join_room', {'roomId': roomId});
+  }
+
+  /// Leaves the current room's socket channel (does NOT disconnect the shared
+  /// socket — chat, notifications and lobby updates keep flowing).
+  void leaveCurrentRoom() {
+    final id = _currentRoomId;
+    _currentRoomId = null;
+    if (id != null) emit('leave_room', {'roomId': id});
+  }
 
   void startGame(String roomId) => emit('start_game', {'roomId': roomId});
+
+  /// Leave an active game mid-match — server notifies others + prompts the host
+  /// to drop in a bot that resumes from this seat.
+  void leaveGame(String roomId) => emit('leave_game', {'roomId': roomId});
+
+  /// Host action: replace an abandoned seat with a medium bot.
+  void replaceWithBot(String roomId, int seat) =>
+      emit('replace_with_bot', {'roomId': roomId, 'seat': seat});
 
   void placeBid(String roomId, int bid) =>
       emit('place_bid', {'roomId': roomId, 'bid': bid});
@@ -81,6 +128,10 @@ class SocketService {
 
   void sendEmoji(String roomId, String emoji) =>
       emit('send_emoji', {'roomId': roomId, 'emoji': emoji});
+
+  /// Private, ephemeral in-game DM to a single player in the room.
+  void sendGameDm(String roomId, String toUserId, String text) =>
+      emit('game_dm', {'roomId': roomId, 'toUserId': toUserId, 'text': text});
 
   void sendPrivateMessage(String toUserId, String text) =>
       emit('private_message', {'toUserId': toUserId, 'text': text});

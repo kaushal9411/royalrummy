@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
+import '../../../../core/services/socket_service.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/widgets/user_avatar.dart';
 import '../../../auth/presentation/bloc/auth_bloc.dart';
@@ -19,6 +21,14 @@ class _RoomPageState extends State<RoomPage> with TickerProviderStateMixin {
   final _repo  = RoomRepository();
   Map<String, dynamic>? _room;
   bool _loading = false;
+  bool _starting = false;     // host pressed Start, waiting for game_started
+  bool _navigated = false;    // guard against double navigation to /game
+  Timer? _startTimeout;
+
+  // Socket listener refs (so we remove only OURS in dispose)
+  late final SocketCallback _roomCb;
+  late final SocketCallback _startedCb;
+  late final SocketCallback _errCb;
 
   late final AnimationController _pulseCtrl;
   late final AnimationController _enterCtrl;
@@ -33,6 +43,16 @@ class _RoomPageState extends State<RoomPage> with TickerProviderStateMixin {
     _pulseAnim = CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut);
     _fadeIn    = CurvedAnimation(parent: _enterCtrl, curve: Curves.easeOut);
 
+    // Real-time room updates: reload roster on join/leave/bot changes, and
+    // navigate everyone to the table the moment the host starts the game.
+    _roomCb    = (_) { if (mounted) _loadRoom(); };
+    _startedCb = (_) => _goToGame();
+    _errCb     = _onSocketError;
+    SocketService().on('room_updated',  _roomCb);
+    SocketService().on('player_joined', _roomCb);
+    SocketService().on('game_started',  _startedCb);
+    SocketService().on('error',         _errCb);
+
     _loadRoom();
     context.read<GameBloc>().add(GameJoinRoom(widget.roomId, 0));
     Future.delayed(const Duration(milliseconds: 100), () {
@@ -42,9 +62,30 @@ class _RoomPageState extends State<RoomPage> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    _startTimeout?.cancel();
+    SocketService().offCallback('room_updated',  _roomCb);
+    SocketService().offCallback('player_joined', _roomCb);
+    SocketService().offCallback('game_started',  _startedCb);
+    SocketService().offCallback('error',         _errCb);
     _pulseCtrl.dispose();
     _enterCtrl.dispose();
     super.dispose();
+  }
+
+  void _goToGame() {
+    if (_navigated || !mounted) return;
+    _navigated = true;
+    _startTimeout?.cancel();
+    context.go('/game/${widget.roomId}');
+  }
+
+  void _onSocketError(dynamic data) {
+    if (!mounted || !_starting) return;
+    // A start attempt failed (e.g. not host / not enough players / bet escrow).
+    _startTimeout?.cancel();
+    setState(() => _starting = false);
+    final msg = (data is Map ? data['message'] as String? : null) ?? 'Could not start the game';
+    _showError(msg);
   }
 
   Future<void> _loadRoom() async {
@@ -127,12 +168,28 @@ class _RoomPageState extends State<RoomPage> with TickerProviderStateMixin {
       ((_room?['players'] as List?) ?? []).any((p) => p['is_bot'] == true);
 
   void _startGame() {
+    if (_starting) return;
     if (_betAmount > 0 && _hasBot) {
       _showBotBetWarning();
       return;
     }
+    _beginStart();
+  }
+
+  /// Emits start_game and waits for the server's `game_started` (which
+  /// navigates everyone via the socket listener). Does NOT navigate optimistically
+  /// so a rejected start no longer strands the host on an empty game loader.
+  void _beginStart() {
+    if (!mounted || _navigated) return;
+    setState(() => _starting = true);
     context.read<GameBloc>().add(GameStartGame(widget.roomId));
-    context.go('/game/${widget.roomId}');
+    _startTimeout?.cancel();
+    _startTimeout = Timer(const Duration(seconds: 8), () {
+      if (mounted && _starting && !_navigated) {
+        setState(() => _starting = false);
+        _showError('Start timed out. Please check your connection and try again.');
+      }
+    });
   }
 
   void _showBotBetWarning() {
@@ -153,18 +210,14 @@ class _RoomPageState extends State<RoomPage> with TickerProviderStateMixin {
 
   Future<void> _playFreeWithBots() async {
     setState(() => _loading = true);
-    // Capture context references before the async gap.
-    final gameBloc = context.read<GameBloc>();
-    final router   = GoRouter.of(context);
     try {
       await _repo.resetBet(widget.roomId);
-      if (!context.mounted) return;
-      gameBloc.add(GameStartGame(widget.roomId));
-      router.go('/game/${widget.roomId}');
+      if (!mounted) return;
+      setState(() => _loading = false);
+      _beginStart(); // emit start, navigate on game_started
     } catch (e) {
-      _showError(e.toString().replaceFirst('Exception: ', ''));
-    } finally {
       if (mounted) setState(() => _loading = false);
+      _showError(e.toString().replaceFirst('Exception: ', ''));
     }
   }
 
@@ -400,7 +453,7 @@ class _RoomPageState extends State<RoomPage> with TickerProviderStateMixin {
   );
 
   Widget _buildStartButton() {
-    final canStart = _playerCount == 4;
+    final canStart = _playerCount == 4 && !_starting;
     return AnimatedBuilder(
       animation: _pulseAnim,
       builder: (_, __) => GestureDetector(
@@ -429,16 +482,24 @@ class _RoomPageState extends State<RoomPage> with TickerProviderStateMixin {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(
-                canStart ? Icons.play_circle_filled_rounded : Icons.hourglass_empty_rounded,
-                color: canStart ? Colors.white : AppColors.textMuted,
-                size: 24,
-              ),
+              if (_starting)
+                const SizedBox(
+                  width: 22, height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white),
+                )
+              else
+                Icon(
+                  canStart ? Icons.play_circle_filled_rounded : Icons.hourglass_empty_rounded,
+                  color: canStart ? Colors.white : AppColors.textMuted,
+                  size: 24,
+                ),
               const SizedBox(width: 10),
               Text(
-                canStart ? 'Start Game' : 'Need ${4 - _playerCount} more player(s)',
+                _starting
+                    ? 'Starting…'
+                    : (_playerCount == 4 ? 'Start Game' : 'Need ${4 - _playerCount} more player(s)'),
                 style: TextStyle(
-                  color: canStart ? Colors.white : AppColors.textMuted,
+                  color: (_playerCount == 4 || _starting) ? Colors.white : AppColors.textMuted,
                   fontWeight: FontWeight.bold,
                   fontSize: 16,
                 ),

@@ -67,6 +67,7 @@ dependencies:
 
   # Secure storage for Hive encryption key (uses Android Keystore / iOS Keychain)
   flutter_secure_storage: ^9.2.2
+  video_player: ^2.11.1
 
 
 dev_dependencies:
@@ -87,3 +88,4 @@ flutter:
     - assets/cards/
     - assets/sounds/
     - assets/legal/
+    - assets/videos/

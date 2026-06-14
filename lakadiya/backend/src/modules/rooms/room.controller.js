@@ -1,5 +1,17 @@
 const roomService = require('./room.service');
+const { getIO } = require('../../socket/socket.manager');
 const { isExcluded, checkSpendLimit } = require('../responsible_gaming/responsible_gaming.service');
+
+// Tell every connected client to refresh the open-rooms list.
+function broadcastLobbyUpdate() {
+  try { getIO().emit('lobby_updated'); } catch (_) {}
+}
+
+// Tell members of a specific room to reload its roster.
+function broadcastRoomUpdate(roomId) {
+  if (!roomId) return;
+  try { getIO().to(roomId).emit('room_updated', { roomId }); } catch (_) {}
+}
 
 const _checkResponsibleGaming = async (userId, betAmount) => {
   if (await isExcluded(userId)) {
@@ -20,6 +32,7 @@ const createRoom = async (req, res, next) => {
     const betAmount = req.body.betAmount ?? 0;
     await _checkResponsibleGaming(req.user.id, betAmount);
     const room = await roomService.createRoom(req.user.id, req.body.isPrivate, betAmount);
+    if (!room.is_private) broadcastLobbyUpdate(); // new public room appears in lobby
     res.status(201).json(room);
   } catch (err) { next(err); }
 };
@@ -30,6 +43,8 @@ const joinRoom = async (req, res, next) => {
     // only when the room actually has a non-zero bet amount.
     await _checkResponsibleGaming(req.user.id, 0);
     const room = await roomService.joinRoom(req.user.id, req.params.code);
+    broadcastRoomUpdate(room.id);  // existing members see the new player
+    broadcastLobbyUpdate();        // lobby player-count changes
     res.json(room);
   } catch (err) { next(err); }
 };
@@ -44,6 +59,8 @@ const getRoomDetails = async (req, res, next) => {
 const leaveRoom = async (req, res, next) => {
   try {
     await roomService.leaveRoom(req.user.id, req.params.roomId);
+    broadcastRoomUpdate(req.params.roomId); // remaining members refresh roster/host
+    broadcastLobbyUpdate();
     res.json({ message: 'Left room' });
   } catch (err) { next(err); }
 };
@@ -51,6 +68,8 @@ const leaveRoom = async (req, res, next) => {
 const deleteRoom = async (req, res, next) => {
   try {
     await roomService.deleteRoom(req.user.id, req.params.roomId);
+    broadcastRoomUpdate(req.params.roomId); // members get kicked back to lobby
+    broadcastLobbyUpdate();
     res.json({ message: 'Room deleted' });
   } catch (err) { next(err); }
 };
@@ -58,6 +77,8 @@ const deleteRoom = async (req, res, next) => {
 const addBot = async (req, res, next) => {
   try {
     const room = await roomService.addBot(req.user.id, req.params.roomId, req.body.level);
+    broadcastRoomUpdate(req.params.roomId); // members see the new bot/seat fill
+    broadcastLobbyUpdate();
     res.json(room);
   } catch (err) { next(err); }
 };
@@ -72,6 +93,8 @@ const getPublicRooms = async (req, res, next) => {
 const resetBet = async (req, res, next) => {
   try {
     await roomService.resetBet(req.user.id, req.params.roomId);
+    broadcastRoomUpdate(req.params.roomId);
+    broadcastLobbyUpdate();
     res.json({ message: 'Bet reset to free' });
   } catch (err) { next(err); }
 };

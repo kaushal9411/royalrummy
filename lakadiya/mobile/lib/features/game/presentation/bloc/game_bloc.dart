@@ -103,6 +103,13 @@ class GameEmojiReceived extends GameEvent {
   GameEmojiReceived(this.userId, this.emoji);
 }
 
+class GamePlayerReplaced extends GameEvent {
+  final int seat;
+  final String username;
+  final String botLevel;
+  GamePlayerReplaced(this.seat, this.username, this.botLevel);
+}
+
 class GameLeave extends GameEvent {}
 
 // ─── States ───────────────────────────────────────────────────────────────────
@@ -255,6 +262,7 @@ class GameBloc extends Bloc<GameEvent, GameState> {
     on<GamePlaceBid>(_onPlaceBid);
     on<GamePlayCard>(_onPlayCard);
     on<GameNextRound>(_onNextRound);
+    on<GamePlayerReplaced>(_onPlayerReplaced);
     on<GameErrorReceived>(_onError);
     on<GameChatReceived>(_onChat);
     on<GameEmojiReceived>(_onEmoji);
@@ -286,6 +294,14 @@ class GameBloc extends Bloc<GameEvent, GameState> {
     _socket.on('game_result',      (d) => add(GameResult(Map<String, dynamic>.from(d as Map))));
     _socket.on('game_state_update',(d) => add(GameStateUpdated(Map<String, dynamic>.from(d as Map))));
     _socket.on('game_state_sync',  (d) => add(GameStateSynced(Map<String, dynamic>.from(d as Map))));
+    _socket.on('player_replaced_by_bot', (d) {
+      final data = Map<String, dynamic>.from(d as Map);
+      add(GamePlayerReplaced(
+        (data['seat'] as num).toInt(),
+        data['username'] as String? ?? 'Bot (Medium)',
+        data['botLevel'] as String? ?? 'medium',
+      ));
+    });
     _socket.on('error',            (d) => add(GameErrorReceived((d as Map)['message'] as String)));
     _socket.on('chat_message',     (d) {
       final data = Map<String, dynamic>.from(d as Map);
@@ -501,6 +517,36 @@ class GameBloc extends Bloc<GameEvent, GameState> {
     ));
   }
 
+  void _onPlayerReplaced(GamePlayerReplaced event, Emitter<GameState> emit) {
+    if (state is! GameInProgress) return;
+    final gip = state as GameInProgress;
+    final s = gip.state;
+    // Flip the abandoned seat to a bot so every client renders it as a bot.
+    final newPlayers = s.players.map((p) => p.seat == event.seat
+        ? PlayerInfo(
+            seat:     p.seat,
+            userId:   null,
+            username: event.username,
+            avatar:   null,
+            isBot:    true,
+            botLevel: event.botLevel,
+          )
+        : p).toList();
+    final ns = GameStateEntity(
+      roomId: s.roomId, matchId: s.matchId, round: s.round, phase: s.phase,
+      dealer: s.dealer, bids: s.bids, tricksWon: s.tricksWon, scores: s.scores,
+      currentTurn: s.currentTurn, ledSuit: s.ledSuit, currentTrick: s.currentTrick,
+      players: newPlayers, hand: s.hand, mySeat: s.mySeat,
+    );
+    emit(GameInProgress(
+      state: ns,
+      chatMessages: gip.chatMessages,
+      lastTrickResult: gip.lastTrickResult,
+      lastRoundResult: gip.lastRoundResult,
+      gameResult: gip.gameResult,
+    ));
+  }
+
   void _onError(GameErrorReceived event, Emitter<GameState> emit) {
     if (state is GameInProgress) {
       final prev = state as GameInProgress;
@@ -537,14 +583,16 @@ class GameBloc extends Bloc<GameEvent, GameState> {
     for (final e in [
       'game_started', 'deal_cards', 'bidding_started', 'bid_placed',
       'card_played', 'trick_result', 'round_result', 'game_result',
-      'game_state_update', 'game_state_sync', 'error',
+      'game_state_update', 'game_state_sync', 'player_replaced_by_bot', 'error',
       'chat_message', 'emoji_reaction',
     ]) { _socket.off(e); }
     // Allow the next GameJoinRoom to re-register listeners fresh.
     _listenersRegistered = false;
     _pendingPlayers = [];
     _pendingHand    = [];
-    _socket.disconnect();
+    // Leave only the room channel — keep the shared socket connected so chat,
+    // notifications and lobby updates keep working after a game ends.
+    _socket.leaveCurrentRoom();
     emit(GameInitial());
   }
 

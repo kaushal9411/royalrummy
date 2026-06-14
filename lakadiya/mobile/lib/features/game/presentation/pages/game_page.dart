@@ -62,6 +62,7 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
   StateSetter? _chatModalSetState;
   bool _bidDialogOpen = false;
   bool _roundResultDialogOpen = false;
+  bool _addBotDialogOpen = false;
 
   // Responsible gaming: show a reminder every 30 minutes of continuous play
   Timer? _reminderTimer;
@@ -73,11 +74,15 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
   final List<Map<String, dynamic>> _dmToasts = [];
   final List<Map<String, dynamic>> _floatingMsgs = [];
 
+  // Unread DM count per sender userId — drives the pulsing badge on seats.
+  final Map<String, int> _unreadBySender = {};
+
   // ── Inline quick-chat (message icon tap) ──
   int? _activeInlineSeat;
   PlayerInfo? _activeInlinePlayer;
   final TextEditingController _inlineChatCtl = TextEditingController();
   final FocusNode _inlineChatFocus = FocusNode();
+  final ScrollController _inlineScrollCtl = ScrollController();
 
   @override
   void initState() {
@@ -99,7 +104,9 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
 
     SocketService().on('chat_message', _onRoomChat);
     SocketService().on('emoji_reaction', _onEmojiReaction);
-    SocketService().on('private_message', _onInGamePrivateMsg);
+    SocketService().on('game_dm', _onGameDm);
+    SocketService().on('player_left_game', _onPlayerLeftGame);
+    SocketService().on('player_replaced_by_bot', _onPlayerReplacedByBot);
 
     final authState = context.read<AuthBloc>().state;
     if (authState is AuthAuthenticated) {
@@ -149,6 +156,31 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
     setState(() => _chatMessages.add(msg));
     _chatModalSetState?.call(() {});
     _scrollChatToBottom();
+    // Public indicator: float the message near the sender's seat so everyone
+    // notices even with the chat sheet closed.
+    final relSeat = _relSeatForUser(msg['userId'] as String?);
+    if (relSeat != null && relSeat != 0) {
+      _showFloatingNearSeat(relSeat, msg['message'] as String? ?? '');
+    }
+  }
+
+  // Relative seat (0=me,1=right,2=top,3=left) for a userId, or null if absent.
+  int? _relSeatForUser(String? uid) {
+    if (uid == null) return null;
+    final st = context.read<GameBloc>().state;
+    if (st is! GameInProgress) return null;
+    for (final p in st.state.players) {
+      if (p.userId == uid) return (p.seat - st.state.mySeat + 4) % 4;
+    }
+    return null;
+  }
+
+  void _showFloatingNearSeat(int relSeat, String text) {
+    final id = DateTime.now().microsecondsSinceEpoch;
+    setState(() => _floatingMsgs.add({'text': text, 'relSeat': relSeat, 'id': id}));
+    Future.delayed(const Duration(milliseconds: 2500), () {
+      if (mounted) setState(() => _floatingMsgs.removeWhere((m) => m['id'] == id));
+    });
   }
 
   void _onEmojiReaction(dynamic data) {
@@ -172,25 +204,182 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
     });
   }
 
-  void _onInGamePrivateMsg(dynamic data) {
+  // Private, ephemeral in-game DM (only sender + receiver). The server echoes
+  // our own sends back; we ignore those because we add them optimistically.
+  void _onGameDm(dynamic data) {
     if (!mounted) return;
-    final msg = Map<String, dynamic>.from(data as Map);
-    final senderId = msg['sender_id'] as String?;
-    // Ignore echo of my own sent messages
-    if (senderId == null || senderId == _myUserId) return;
+    final d = Map<String, dynamic>.from(data as Map);
+    final from = d['from'] as String?;
+    final fromMe = from == _myUserId;
+    if (fromMe) return; // ignore echo of our own message
+    final partner = from; // for a received DM, the partner is the sender
+    if (partner == null) return;
 
+    final entry = <String, dynamic>{
+      'fromMe':   false,
+      'text':     d['text'] as String? ?? '',
+      'fromName': d['fromName'] as String? ?? 'Player',
+      'ts':       d['ts'] ?? DateTime.now().millisecondsSinceEpoch,
+    };
+    final convoOpen = _activeInlinePlayer?.userId == partner;
     final toastId = DateTime.now().millisecondsSinceEpoch;
-    final toast = Map<String, dynamic>.from(msg)..['\$toastId'] = toastId;
 
     setState(() {
-      _inboxMsgs[senderId] ??= [];
-      _inboxMsgs[senderId]!.add(msg);
-      _dmToasts.add(toast);
+      _inboxMsgs[partner] ??= [];
+      _inboxMsgs[partner]!.add(entry);
+      if (!convoOpen) {
+        _unreadBySender[partner] = (_unreadBySender[partner] ?? 0) + 1;
+        _dmToasts.add({
+          'sender_id':   partner,
+          'sender_name': entry['fromName'],
+          'text':        entry['text'],
+          '\$toastId':   toastId,
+        });
+      }
     });
+    HapticFeedback.lightImpact(); // subtle buzz so the player notices
+    if (convoOpen) {
+      _scrollInlineToBottom();
+    } else {
+      Future.delayed(const Duration(seconds: 3), () {
+        if (mounted) setState(() => _dmToasts.removeWhere((t) => t['\$toastId'] == toastId));
+      });
+    }
+  }
 
-    Future.delayed(const Duration(seconds: 3), () {
-      if (mounted) setState(() => _dmToasts.removeWhere((t) => t['\$toastId'] == toastId));
+  void _scrollInlineToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_inlineScrollCtl.hasClients) {
+        _inlineScrollCtl.jumpTo(_inlineScrollCtl.position.maxScrollExtent);
+      }
     });
+  }
+
+  // ── A player left mid-game ──────────────────────────────────────────────────
+  void _onPlayerLeftGame(dynamic data) {
+    if (!mounted) return;
+    final d = Map<String, dynamic>.from(data as Map);
+    final seat     = (d['seat'] as num?)?.toInt();
+    final username = d['username'] as String? ?? 'A player';
+    final hostId   = d['hostId'] as String?;
+    if (seat == null) return;
+
+    // Notify everyone.
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(
+        content: Text('$username left the game'),
+        backgroundColor: const Color(0xFF6A3DF0),
+        duration: const Duration(seconds: 3),
+      ));
+
+    // Only the (possibly new) host is asked to drop in a bot.
+    if (hostId != null && hostId == _myUserId) {
+      _showAddBotPrompt(seat, username);
+    }
+  }
+
+  void _onPlayerReplacedByBot(dynamic data) {
+    if (!mounted) return;
+    final d = Map<String, dynamic>.from(data as Map);
+    final name = d['username'] as String? ?? 'A bot';
+    // Dismiss the host prompt if it's still open, then confirm to everyone.
+    if (_addBotDialogOpen) {
+      Navigator.of(context, rootNavigator: true).pop();
+      _addBotDialogOpen = false;
+    }
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(
+        content: Text('$name took over the empty seat'),
+        backgroundColor: AppColors.primary,
+        duration: const Duration(seconds: 2),
+      ));
+  }
+
+  void _showAddBotPrompt(int seat, String username) {
+    if (_addBotDialogOpen) return;
+    _addBotDialogOpen = true;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0E1A2E),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: BorderSide(color: AppColors.primary.withValues(alpha: 0.4)),
+        ),
+        title: const Text('Player left',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 17)),
+        content: Text(
+          '$username left the game. Add a Medium bot to take their seat and continue from here?',
+          style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () { _addBotDialogOpen = false; Navigator.of(dctx).pop(); },
+            child: const Text('Wait', style: TextStyle(color: Colors.white38)),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
+            onPressed: () {
+              _addBotDialogOpen = false;
+              Navigator.of(dctx).pop();
+              SocketService().replaceWithBot(widget.roomId, seat);
+            },
+            icon: const Icon(Icons.smart_toy_rounded, size: 18, color: Colors.white),
+            label: const Text('Add Medium Bot', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Leaving an active game ──────────────────────────────────────────────────
+  bool _isGameActive() {
+    final st = context.read<GameBloc>().state;
+    return st is GameInProgress && st.state.phase != 'game_end';
+  }
+
+  void _leaveGame() {
+    if (_isGameActive()) {
+      // Tell the table so others are notified and the host can add a bot.
+      SocketService().leaveGame(widget.roomId);
+    }
+    context.read<GameBloc>().add(GameLeave());
+    context.go('/lobby');
+  }
+
+  Future<void> _confirmLeaveGame() async {
+    if (!_isGameActive()) { _leaveGame(); return; }
+    final leave = await showDialog<bool>(
+      context: context,
+      builder: (dctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0E1A2E),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: BorderSide(color: AppColors.danger.withValues(alpha: 0.4)),
+        ),
+        title: const Text('Leave the game?',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 17)),
+        content: const Text(
+          'The game is still in progress. Your seat will be offered to a bot so the others can keep playing.',
+          style: TextStyle(color: Colors.white70, fontSize: 14, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dctx).pop(false),
+            child: const Text('Stay', style: TextStyle(color: Colors.white38)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger),
+            onPressed: () => Navigator.of(dctx).pop(true),
+            child: const Text('Leave', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    if (leave == true) _leaveGame();
   }
 
   @override
@@ -205,9 +394,12 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
     _chatScrollCtl.dispose();
     _inlineChatCtl.dispose();
     _inlineChatFocus.dispose();
+    _inlineScrollCtl.dispose();
     SocketService().off('chat_message');
     SocketService().off('emoji_reaction');
-    SocketService().off('private_message');
+    SocketService().off('game_dm');
+    SocketService().off('player_left_game');
+    SocketService().off('player_replaced_by_bot');
     _Sfx.cleanup();
     super.dispose();
   }
@@ -217,9 +409,24 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
     setState(() {
       _activeInlineSeat   = relSeat;
       _activeInlinePlayer = player;
+      if (player.userId != null) _unreadBySender.remove(player.userId); // mark read
     });
     _inlineChatCtl.clear();
+    _scrollInlineToBottom();
     Future.microtask(() => _inlineChatFocus.requestFocus());
+  }
+
+  // Opens the private chat with a player identified by userId (used by toasts).
+  void _openInlineChatByUserId(String uid) {
+    final st = context.read<GameBloc>().state;
+    if (st is! GameInProgress) return;
+    PlayerInfo? player;
+    for (final p in st.state.players) {
+      if (p.userId == uid) { player = p; break; }
+    }
+    if (player == null) return;
+    final relSeat = (player.seat - st.state.mySeat + 4) % 4;
+    _openInlineChat(player, relSeat);
   }
 
   void _closeInlineChat() {
@@ -228,12 +435,27 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
   }
 
   void _submitInlineChat() {
-    final text = _inlineChatCtl.text.trim();
-    if (text.isNotEmpty) {
-      _sendToRoomWithFloat(_activeInlineSeat!, text);
+    final text   = _inlineChatCtl.text.trim();
+    final player = _activeInlinePlayer;
+    if (text.isEmpty || player == null || player.userId == null) {
+      _inlineChatCtl.clear();
+      return;
     }
+    final uid = player.userId!;
+    setState(() {
+      _inboxMsgs[uid] ??= [];
+      _inboxMsgs[uid]!.add({
+        'fromMe':   true,
+        'text':     text,
+        'fromName': _myUsername ?? 'You',
+        'ts':       DateTime.now().millisecondsSinceEpoch,
+      });
+    });
+    // Private — delivered ONLY to this player (+ echoed to us, which we ignore).
+    SocketService().sendGameDm(widget.roomId, uid, text);
     _inlineChatCtl.clear();
-    _closeInlineChat();
+    _scrollInlineToBottom();
+    // Keep the panel open so the conversation/history stays visible.
   }
 
   // ── Player profile dialog ──────────────────────────────────────────────────
@@ -313,27 +535,14 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
     ).then((_) => _chatModalSetState = null);
   }
 
-
-  void _sendToRoomWithFloat(int relSeat, String text) {
-    final msgId = DateTime.now().millisecondsSinceEpoch;
-    setState(() {
-      _chatMessages.add({
-        'username': _myUsername ?? 'You',
-        'message': text,
-        'timestamp': msgId,
-      });
-      _floatingMsgs.add({'text': text, 'relSeat': relSeat, 'id': msgId});
-    });
-    SocketService().sendChat(widget.roomId, text);
-    Future.delayed(const Duration(milliseconds: 2000),
-        () { if (mounted) setState(() => _floatingMsgs.removeWhere((m) => m['id'] == msgId)); });
-  }
-
   @override
   Widget build(BuildContext context) {
     return PopScope(
       onPopInvokedWithResult: (didPop, _) {
-        if (didPop) context.read<GameBloc>().add(GameLeave());
+        if (didPop) {
+          if (_isGameActive()) SocketService().leaveGame(widget.roomId);
+          context.read<GameBloc>().add(GameLeave());
+        }
       },
       child: Scaffold(
         body: BlocConsumer<GameBloc, GameState>(
@@ -389,8 +598,21 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
             }
           },
           builder: (ctx, state) {
-            if (state is GameInProgress) return _buildGame(ctx, state);
-            return _buildLoader();
+            final inGame = state is GameInProgress;
+            final child = inGame ? _buildGame(ctx, state) : _buildLoader();
+            // Cross-fade + gentle zoom when the table first appears.
+            return AnimatedSwitcher(
+              duration: const Duration(milliseconds: 480),
+              switchInCurve: Curves.easeOutCubic,
+              transitionBuilder: (c, anim) => FadeTransition(
+                opacity: anim,
+                child: ScaleTransition(
+                  scale: Tween<double>(begin: 0.96, end: 1.0).animate(anim),
+                  child: c,
+                ),
+              ),
+              child: KeyedSubtree(key: ValueKey(inGame), child: child),
+            );
           },
         ),
       ),
@@ -494,8 +716,8 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
                   toast: t,
                   onTap: () {
                     final uid = t['sender_id'] as String?;
-                    final name = t['sender_name'] as String? ?? 'Player';
-                    if (uid != null) { setState(() => _dmToasts.remove(t)); context.go('/dm/$uid', extra: name); }
+                    setState(() => _dmToasts.remove(t));
+                    if (uid != null) _openInlineChatByUserId(uid);
                   },
                   onDismiss: () => setState(() => _dmToasts.remove(t)),
                 )).toList(),
@@ -511,6 +733,8 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
               player: _activeInlinePlayer!,
               controller: _inlineChatCtl,
               focusNode: _inlineChatFocus,
+              scrollController: _inlineScrollCtl,
+              history: _inboxMsgs[_activeInlinePlayer!.userId] ?? const [],
               onSend: _submitInlineChat,
               onClose: _closeInlineChat,
             ),
@@ -534,7 +758,7 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
             padding: const EdgeInsets.fromLTRB(4, 4, 0, 4),
             child: Row(children: [
               GestureDetector(
-                onTap: () { context.read<GameBloc>().add(GameLeave()); context.go('/lobby'); },
+                onTap: _confirmLeaveGame,
                 child: Container(
                   width: 32, height: 32,
                   decoration: BoxDecoration(color: Colors.black45, borderRadius: BorderRadius.circular(8)),
@@ -577,17 +801,9 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
                   _ScoreBadge(tricks, bid: bid, isTurn: gs.currentTurn == seat),
                   if (!player.isBot && player.userId != null) ...[
                     const SizedBox(width: 4),
-                    GestureDetector(
+                    _MailButton(
+                      unread: _unreadBySender[player.userId] ?? 0,
                       onTap: () => _openInlineChat(player, 2),
-                      child: Container(
-                        width: 24, height: 24,
-                        decoration: BoxDecoration(
-                          color: AppColors.primary.withValues(alpha: 0.18),
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: AppColors.primary.withValues(alpha: 0.4)),
-                        ),
-                        child: const Icon(Icons.mail_outline_rounded, color: AppColors.primary, size: 13),
-                      ),
                     ),
                   ],
                 ],
@@ -625,17 +841,10 @@ class _GamePageState extends State<GamePage> with SingleTickerProviderStateMixin
             _ScoreBadge(tricks, bid: bid, isTurn: isTurn),
             if (!player.isBot && player.userId != null) ...[
               const SizedBox(height: 4),
-              GestureDetector(
+              _MailButton(
+                unread: _unreadBySender[player.userId] ?? 0,
                 onTap: () => _openInlineChat(player, isLeft ? 3 : 1),
-                child: Container(
-                  width: 26, height: 22,
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withValues(alpha: 0.18),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: AppColors.primary.withValues(alpha: 0.35)),
-                  ),
-                  child: const Icon(Icons.mail_outline_rounded, color: AppColors.primary, size: 12),
-                ),
+                width: 26, height: 22,
               ),
             ],
           ],
@@ -1661,39 +1870,73 @@ class _SparklePainter extends CustomPainter {
 }
 
 // ── Score badge ────────────────────────────────────────────────────────────────
-class _ScoreBadge extends StatelessWidget {
+class _ScoreBadge extends StatefulWidget {
   final int tricks;
   final int? bid;
   final bool isTurn;
   const _ScoreBadge(this.tricks, {this.bid, this.isTurn = false});
 
   @override
-  Widget build(BuildContext context) => AnimatedContainer(
-    duration: const Duration(milliseconds: 300),
-    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-    decoration: BoxDecoration(
-      color: isTurn
-          ? AppColors.primary.withValues(alpha: 0.85)
-          : Colors.black.withValues(alpha: 0.55),
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(
-        color: isTurn ? AppColors.primary : Colors.white24,
-        width: isTurn ? 1.5 : 0.8,
-      ),
-      boxShadow: isTurn
-          ? [BoxShadow(
-              color: AppColors.primary.withValues(alpha: 0.4), blurRadius: 8)]
-          : null,
-    ),
-    child: Text(
-      bid != null ? '$tricks/$bid' : '$tricks',
-      style: TextStyle(
-        color: isTurn ? Colors.white : const Color(0xFFCCFF90),
-        fontWeight: FontWeight.bold,
-        fontSize: 12,
-      ),
-    ),
-  );
+  State<_ScoreBadge> createState() => _ScoreBadgeState();
+}
+
+class _ScoreBadgeState extends State<_ScoreBadge>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulse = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1000))
+      ..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isTurn = widget.isTurn;
+    return AnimatedBuilder(
+      animation: _pulse,
+      builder: (_, __) {
+        final p = isTurn ? _pulse.value : 0.0;
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+          decoration: BoxDecoration(
+            color: isTurn
+                ? AppColors.primary.withValues(alpha: 0.85)
+                : Colors.black.withValues(alpha: 0.55),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isTurn
+                  ? Color.lerp(AppColors.primary, AppColors.accent, p * 0.6)!
+                  : Colors.white24,
+              width: isTurn ? 1.5 : 0.8,
+            ),
+            boxShadow: isTurn
+                ? [BoxShadow(
+                    color: AppColors.primary.withValues(alpha: 0.3 + p * 0.45),
+                    blurRadius: 6 + p * 12,
+                    spreadRadius: p * 1.5)]
+                : null,
+          ),
+          child: Text(
+            widget.bid != null ? '${widget.tricks}/${widget.bid}' : '${widget.tricks}',
+            style: TextStyle(
+              color: isTurn ? Colors.white : const Color(0xFFCCFF90),
+              fontWeight: FontWeight.bold,
+              fontSize: 12,
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
 
 // ── Card fan (bot hands) ───────────────────────────────────────────────────────
@@ -1782,60 +2025,167 @@ class _BackPatternPainter extends CustomPainter {
 }
 
 // ── Wood background ────────────────────────────────────────────────────────────
-class _WoodBackground extends StatelessWidget {
+// ── Premium animated casino-felt table ───────────────────────────────────────
+// A cached emerald-felt base (gradient + fabric grain + gold medallion + suit
+// watermark + vignette) with a lightweight drifting "sheen" highlight on top.
+class _WoodBackground extends StatefulWidget {
   const _WoodBackground();
   @override
-  Widget build(BuildContext context) =>
-      SizedBox.expand(child: CustomPaint(painter: _WoodPainter()));
+  State<_WoodBackground> createState() => _WoodBackgroundState();
 }
 
-class _WoodPainter extends CustomPainter {
+class _WoodBackgroundState extends State<_WoodBackground>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this, duration: const Duration(seconds: 16))
+      ..repeat();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        // Heavy, static felt — painted once and cached.
+        const RepaintBoundary(
+          child: SizedBox.expand(child: CustomPaint(painter: _FeltBasePainter())),
+        ),
+        // Cheap animated sheen — one radial gradient per frame.
+        SizedBox.expand(
+          child: AnimatedBuilder(
+            animation: _ctrl,
+            builder: (_, __) => CustomPaint(painter: _FeltSheenPainter(_ctrl.value)),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _FeltBasePainter extends CustomPainter {
+  const _FeltBasePainter();
+
   @override
   void paint(Canvas canvas, Size size) {
-    final rect = Rect.fromLTWH(0, 0, size.width, size.height);
+    final rect   = Offset.zero & size;
+    final center = Offset(size.width / 2, size.height * 0.46);
 
+    // 1) Emerald felt with a soft spotlight in the middle of the table.
     canvas.drawRect(
       rect,
       Paint()
-        ..shader = const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFFB8855A), Color(0xFF9C6B3E), Color(0xFFA87848)],
-          stops: [0.0, 0.5, 1.0],
+        ..shader = const RadialGradient(
+          center: Alignment(0, -0.06),
+          radius: 1.05,
+          colors: [Color(0xFF1C7A50), Color(0xFF0E5235), Color(0xFF05180F)],
+          stops: [0.0, 0.55, 1.0],
         ).createShader(rect),
     );
 
-    final rng  = math.Random(42);
-    final dark = Paint()..style = PaintingStyle.stroke;
-
-    for (int i = 0; i < 70; i++) {
-      final y   = rng.nextDouble() * size.height;
-      final op  = 0.04 + rng.nextDouble() * 0.12;
-      final isDk = rng.nextBool();
-      dark
-        ..color       = (isDk ? Colors.black : Colors.white).withValues(alpha: op)
-        ..strokeWidth = 0.4 + rng.nextDouble() * 2.0;
-
-      final path = Path()..moveTo(0, y);
-      for (double x = 0; x <= size.width; x += 18) {
-        path.lineTo(x, y + (rng.nextDouble() - 0.5) * 5);
-      }
-      canvas.drawPath(path, dark);
+    // 2) Fine fabric grain for that woven-felt texture.
+    final rng = math.Random(7);
+    final grain = Paint();
+    for (int i = 0; i < 900; i++) {
+      final dx = rng.nextDouble() * size.width;
+      final dy = rng.nextDouble() * size.height;
+      final light = rng.nextBool();
+      grain.color = (light ? Colors.white : Colors.black)
+          .withValues(alpha: 0.015 + rng.nextDouble() * 0.03);
+      canvas.drawCircle(Offset(dx, dy), 0.6 + rng.nextDouble() * 0.8, grain);
     }
 
+    // 3) Centre medallion — concentric gold rings framing the play area.
+    final short = size.shortestSide;
+    for (final r in [short * 0.30, short * 0.30 + 5, short * 0.40]) {
+      canvas.drawCircle(
+        center, r,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = r == short * 0.40 ? 1.0 : 1.6
+          ..color = const Color(0xFFFFD600).withValues(alpha: 0.10),
+      );
+    }
+
+    // 4) Faint spade watermark inside the medallion.
+    final tp = TextPainter(
+      text: TextSpan(
+        text: '♠',
+        style: TextStyle(
+          fontSize: short * 0.34,
+          color: const Color(0xFFFFD600).withValues(alpha: 0.05),
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(canvas, center - Offset(tp.width / 2, tp.height / 2));
+
+    // 5) Vignette for depth.
     canvas.drawRect(
       rect,
       Paint()
         ..shader = RadialGradient(
-          center: Alignment.center,
+          center: const Alignment(0, -0.06),
           radius: 1.0,
-          colors: [Colors.transparent, Colors.black.withValues(alpha: 0.25)],
+          colors: [Colors.transparent, Colors.black.withValues(alpha: 0.45)],
+          stops: const [0.6, 1.0],
         ).createShader(rect),
+    );
+
+    // 6) Thin inset gold frame — the premium border.
+    final inset = RRect.fromRectAndRadius(
+      rect.deflate(6), const Radius.circular(14),
+    );
+    canvas.drawRRect(
+      inset,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2
+        ..color = const Color(0xFFFFD600).withValues(alpha: 0.18),
     );
   }
 
   @override
   bool shouldRepaint(_) => false;
+}
+
+class _FeltSheenPainter extends CustomPainter {
+  final double t; // 0..1 loop
+  _FeltSheenPainter(this.t);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect  = Offset.zero & size;
+    final angle = t * 2 * math.pi;
+    // Soft highlight drifting slowly in a gentle ellipse over the felt.
+    final cx = size.width * (0.5 + 0.30 * math.cos(angle));
+    final cy = size.height * (0.42 + 0.20 * math.sin(angle));
+    final glow = Rect.fromCircle(
+      center: Offset(cx, cy), radius: size.shortestSide * 0.65);
+
+    canvas.drawRect(
+      rect,
+      Paint()
+        ..blendMode = BlendMode.plus
+        ..shader = RadialGradient(
+          colors: [
+            const Color(0xFF3FE89A).withValues(alpha: 0.085),
+            Colors.transparent,
+          ],
+        ).createShader(glow),
+    );
+  }
+
+  @override
+  bool shouldRepaint(_FeltSheenPainter old) => old.t != t;
 }
 
 // ── Room-chat modal sheet content (WhatsApp style) ───────────────────────────
@@ -2128,16 +2478,143 @@ class _FloatingEmojiState extends State<_FloatingEmoji>
 }
 
 // ── DM toast bubble (fades after 3 s) ────────────────────────────────────────
-class _DmToastBubble extends StatelessWidget {
+// ── Per-seat mail button with pulsing unread badge ───────────────────────────
+class _MailButton extends StatefulWidget {
+  final int unread;
+  final VoidCallback onTap;
+  final double width, height;
+  const _MailButton({
+    required this.unread,
+    required this.onTap,
+    this.width = 24,
+    this.height = 24,
+  });
+
+  @override
+  State<_MailButton> createState() => _MailButtonState();
+}
+
+class _MailButtonState extends State<_MailButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulse = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 850))
+      ..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final has = widget.unread > 0;
+    final base = has ? AppColors.accent : AppColors.primary;
+    return GestureDetector(
+      onTap: widget.onTap,
+      child: AnimatedBuilder(
+        animation: _pulse,
+        builder: (_, __) {
+          return Stack(clipBehavior: Clip.none, children: [
+            Container(
+              width: widget.width,
+              height: widget.height,
+              decoration: BoxDecoration(
+                color: base.withValues(alpha: has ? 0.22 : 0.18),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: base.withValues(alpha: has ? 0.6 : 0.4)),
+                boxShadow: has
+                    ? [BoxShadow(
+                        color: AppColors.accent.withValues(alpha: 0.3 + _pulse.value * 0.5),
+                        blurRadius: 8 + _pulse.value * 6)]
+                    : null,
+              ),
+              child: Icon(
+                has ? Icons.mark_email_unread_rounded : Icons.mail_outline_rounded,
+                color: base, size: 13,
+              ),
+            ),
+            if (has)
+              Positioned(
+                right: -5, top: -5,
+                child: Transform.scale(
+                  scale: 0.9 + _pulse.value * 0.15,
+                  child: Container(
+                    padding: const EdgeInsets.all(2),
+                    constraints: const BoxConstraints(minWidth: 15, minHeight: 15),
+                    decoration: BoxDecoration(
+                      color: AppColors.danger,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: const Color(0xFF0A1525), width: 1.5),
+                    ),
+                    child: Text(
+                      widget.unread > 9 ? '9+' : '${widget.unread}',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                          color: Colors.white, fontSize: 8,
+                          fontWeight: FontWeight.bold, height: 1),
+                    ),
+                  ),
+                ),
+              ),
+          ]);
+        },
+      ),
+    );
+  }
+}
+
+class _DmToastBubble extends StatefulWidget {
   final Map<String, dynamic> toast;
   final VoidCallback onTap;
   final VoidCallback onDismiss;
   const _DmToastBubble({required this.toast, required this.onTap, required this.onDismiss});
 
   @override
+  State<_DmToastBubble> createState() => _DmToastBubbleState();
+}
+
+class _DmToastBubbleState extends State<_DmToastBubble>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _enter;
+
+  @override
+  void initState() {
+    super.initState();
+    _enter = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 280))
+      ..forward();
+  }
+
+  @override
+  void dispose() {
+    _enter.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final name = toast['sender_name'] as String? ?? 'Player';
-    final text = toast['text'] as String? ?? '';
+    final name = widget.toast['sender_name'] as String? ?? 'Player';
+    final text = widget.toast['text'] as String? ?? '';
+    final curve = CurvedAnimation(parent: _enter, curve: Curves.easeOutBack);
+    return FadeTransition(
+      opacity: _enter,
+      child: SlideTransition(
+        position: Tween<Offset>(begin: const Offset(0, -0.4), end: Offset.zero).animate(curve),
+        child: _bubble(name, text),
+      ),
+    );
+  }
+
+  Widget _bubble(String name, String text) {
+    final onTap = widget.onTap;
+    final onDismiss = widget.onDismiss;
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -2179,6 +2656,8 @@ class _InlineChatBar extends StatelessWidget {
   final PlayerInfo player;
   final TextEditingController controller;
   final FocusNode focusNode;
+  final ScrollController scrollController;
+  final List<Map<String, dynamic>> history;
   final VoidCallback onSend;
   final VoidCallback onClose;
 
@@ -2186,6 +2665,8 @@ class _InlineChatBar extends StatelessWidget {
     required this.player,
     required this.controller,
     required this.focusNode,
+    required this.scrollController,
+    required this.history,
     required this.onSend,
     required this.onClose,
   });
@@ -2194,61 +2675,139 @@ class _InlineChatBar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.fromLTRB(10, 6, 6, 6),
       decoration: BoxDecoration(
         color: const Color(0xFF0D1827),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: AppColors.primary.withValues(alpha: 0.5)),
         boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 12)],
       ),
-      child: Row(children: [
-        CircleAvatar(
-          radius: 14,
-          backgroundColor: AppColors.primary.withValues(alpha: 0.2),
-          child: Text(
-            player.username[0].toUpperCase(),
-            style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold, fontSize: 12),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: TextField(
-            controller: controller,
-            focusNode: focusNode,
-            style: const TextStyle(color: Colors.white, fontSize: 13),
-            textInputAction: TextInputAction.send,
-            onSubmitted: (_) => onSend(),
-            decoration: InputDecoration(
-              hintText: '→ ${player.username}',
-              hintStyle: const TextStyle(color: Colors.white38, fontSize: 12),
-              isDense: true,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              filled: true,
-              fillColor: const Color(0xFF0A1525),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(10),
-                borderSide: BorderSide.none,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ── Header: avatar + name + "private" tag ──
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 8, 6, 4),
+            child: Row(children: [
+              CircleAvatar(
+                radius: 13,
+                backgroundColor: AppColors.primary.withValues(alpha: 0.2),
+                child: Text(
+                  player.username.isNotEmpty ? player.username[0].toUpperCase() : '?',
+                  style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold, fontSize: 12),
+                ),
               ),
-            ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(player.username,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                    Row(children: [
+                      const Icon(Icons.lock_rounded, color: Colors.white38, size: 9),
+                      const SizedBox(width: 3),
+                      Text('Private · only ${player.username} sees this',
+                          style: const TextStyle(color: Colors.white38, fontSize: 9)),
+                    ]),
+                  ],
+                ),
+              ),
+              GestureDetector(
+                onTap: onClose,
+                child: const Padding(
+                  padding: EdgeInsets.all(6),
+                  child: Icon(Icons.close_rounded, color: Colors.white54, size: 18),
+                ),
+              ),
+            ]),
           ),
-        ),
-        const SizedBox(width: 6),
-        GestureDetector(
-          onTap: onSend,
-          child: Container(
-            width: 32, height: 32,
-            decoration: const BoxDecoration(color: AppColors.primary, shape: BoxShape.circle),
-            child: const Icon(Icons.send_rounded, color: Colors.white, size: 14),
+          const Divider(height: 1, color: Color(0xFF1E2C40)),
+          // ── History ──
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 150),
+            child: history.isEmpty
+                ? const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 18),
+                    child: Text('No messages yet. Say hi 👋',
+                        style: TextStyle(color: Colors.white30, fontSize: 12)),
+                  )
+                : ListView.builder(
+                    controller: scrollController,
+                    shrinkWrap: true,
+                    padding: const EdgeInsets.fromLTRB(10, 8, 10, 4),
+                    itemCount: history.length,
+                    itemBuilder: (_, i) {
+                      final m = history[i];
+                      final mine = m['fromMe'] == true;
+                      return Align(
+                        alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(vertical: 2),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.5),
+                          decoration: BoxDecoration(
+                            color: mine
+                                ? AppColors.primary.withValues(alpha: 0.85)
+                                : const Color(0xFF1A2940),
+                            borderRadius: BorderRadius.only(
+                              topLeft: const Radius.circular(12),
+                              topRight: const Radius.circular(12),
+                              bottomLeft: Radius.circular(mine ? 12 : 3),
+                              bottomRight: Radius.circular(mine ? 3 : 12),
+                            ),
+                          ),
+                          child: Text(
+                            m['text'] as String? ?? '',
+                            style: TextStyle(
+                              color: mine ? Colors.white : Colors.white.withValues(alpha: 0.9),
+                              fontSize: 12.5, height: 1.3,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
           ),
-        ),
-        GestureDetector(
-          onTap: onClose,
-          child: const Padding(
-            padding: EdgeInsets.all(8),
-            child: Icon(Icons.close_rounded, color: Colors.white54, size: 16),
+          // ── Input row ──
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 4, 6, 8),
+            child: Row(children: [
+              Expanded(
+                child: TextField(
+                  controller: controller,
+                  focusNode: focusNode,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  textInputAction: TextInputAction.send,
+                  onSubmitted: (_) => onSend(),
+                  decoration: InputDecoration(
+                    hintText: 'Message ${player.username}…',
+                    hintStyle: const TextStyle(color: Colors.white38, fontSize: 12),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                    filled: true,
+                    fillColor: const Color(0xFF0A1525),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              GestureDetector(
+                onTap: onSend,
+                child: Container(
+                  width: 34, height: 34,
+                  decoration: const BoxDecoration(color: AppColors.primary, shape: BoxShape.circle),
+                  child: const Icon(Icons.send_rounded, color: Colors.white, size: 15),
+                ),
+              ),
+            ]),
           ),
-        ),
-      ]),
+        ],
+      ),
     );
   }
 }

@@ -44,6 +44,7 @@ function _isSocketThrottled(socketId) {
 }
 
 const BOT_DELAY_MS = 1200; // simulate bot thinking
+const DISCONNECT_GRACE_MS = _envInt('GAME_DISCONNECT_GRACE_MS', 12_000); // wait before treating a drop as a leave
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -193,6 +194,43 @@ async function scheduleBotActions(io, roomId) {
   }
 }
 
+// Marks a seat as abandoned, transfers the host crown if the leaver was host,
+// and notifies the room so the (possibly new) host can drop in a bot.
+async function markPlayerLeft(io, roomId, seat) {
+  const state = gameStates.get(roomId);
+  if (!state) return;
+  const player = state.players[seat];
+  if (!player || player.isBot || player.left) return;
+
+  player.left = true;
+  gameStates.set(roomId, state);
+
+  let hostId = null;
+  try {
+    const r = await query('SELECT host_id FROM rooms WHERE id = $1', [roomId]);
+    hostId = r.rows[0]?.host_id || null;
+    // Leaver was the host → pass the crown to another present, real player.
+    if (hostId && hostId === player.userId) {
+      const next = state.players.find(
+        (p) => !p.isBot && !p.left && p.userId && p.userId !== player.userId
+      );
+      if (next) {
+        hostId = next.userId;
+        await query('UPDATE rooms SET host_id = $1 WHERE id = $2', [hostId, roomId]);
+      }
+    }
+  } catch (e) {
+    logger.error('markPlayerLeft host lookup', e);
+  }
+
+  io.to(roomId).emit('player_left_game', {
+    seat,
+    userId:   player.userId,
+    username: player.username,
+    hostId,
+  });
+}
+
 async function handleRoundEnd(io, roomId, state, roundScores) {
   // Persist round to DB
   if (state.matchId) {
@@ -279,10 +317,84 @@ function registerGameSocket(io, socket) {
       }
 
       io.to(roomId).emit('player_joined', { userId, username: socket.username });
+      // Tell everyone in the room to reload the roster (covers seat/host/bot changes).
+      io.to(roomId).emit('room_updated', { roomId });
     } catch (err) {
       logger.error('join_room error', err);
       socket.emit('error', { message: 'Failed to join room' });
     }
+  });
+
+  // ── Leave room channel (does not remove the player from the DB roster) ──
+  socket.on('leave_room', ({ roomId }) => {
+    if (!roomId) return;
+    socket.leave(roomId);
+    if (socket.roomId === roomId) socket.roomId = null;
+  });
+
+  // ── Leave an ACTIVE game mid-match (explicit) ──
+  // Marks the seat as abandoned, notifies everyone, and asks the host to drop
+  // in a bot. The game resumes from the exact point the player left.
+  socket.on('leave_game', async ({ roomId }) => {
+    const state = gameStates.get(roomId);
+    if (!state) return;
+    const seat = state.players.findIndex((p) => p.userId === userId && !p.isBot && !p.left);
+    if (seat === -1) return;
+    socket.leave(roomId);
+    await markPlayerLeft(io, roomId, seat);
+  });
+
+  // ── Host replaces an abandoned seat with a medium bot, game continues ──
+  socket.on('replace_with_bot', async ({ roomId, seat }) => {
+    const state = gameStates.get(roomId);
+    if (!state) return;
+    try {
+      const r = await query('SELECT host_id FROM rooms WHERE id = $1', [roomId]);
+      if (r.rows[0]?.host_id !== userId) {
+        return socket.emit('error', { message: 'Only the host can add a bot' });
+      }
+    } catch { return; }
+
+    const player = state.players[seat];
+    if (!player || player.isBot) return;
+
+    player.isBot    = true;
+    player.botLevel = 'medium';
+    player.username = 'Bot (Medium)';
+    player.left     = false;
+    player.userId   = null; // bot has no account — payouts skip it
+    gameStates.set(roomId, state);
+
+    io.to(roomId).emit('player_replaced_by_bot', {
+      seat, username: player.username, botLevel: 'medium',
+    });
+
+    // Resume play. If it's this seat's turn (or becomes its turn) the bot acts.
+    await scheduleBotActions(io, roomId);
+  });
+
+  // ── Detect drop-outs (app closed / killed) during an active game ──
+  // Reconnection re-joins the room within a short window, so we wait a grace
+  // period and only treat it as a leave if the player is still gone.
+  socket.on('disconnect', () => {
+    const roomId = socket.roomId;
+    if (!roomId) return;
+    const state = gameStates.get(roomId);
+    if (!state) return;
+    const seat = state.players.findIndex((p) => p.userId === userId && !p.isBot && !p.left);
+    if (seat === -1) return;
+
+    setTimeout(() => {
+      const s = gameStates.get(roomId);
+      if (!s) return;
+      const p = s.players[seat];
+      if (!p || p.isBot || p.left) return;
+      // Reconnected? A live socket for this user is back in the room → ignore.
+      const sid  = userSockets.get(userId);
+      const sock = sid ? io.sockets.sockets.get(sid) : null;
+      if (sock && sock.connected && sock.rooms.has(roomId)) return;
+      markPlayerLeft(io, roomId, seat).catch((e) => logger.error('markPlayerLeft', e));
+    }, DISCONNECT_GRACE_MS);
   });
 
   // ── Start game ──
@@ -479,6 +591,22 @@ function registerGameSocket(io, socket) {
       message:   message.trim(),
       timestamp: Date.now(),
     });
+  });
+
+  // ── Private in-game DM (ephemeral — only sender + target see it) ──
+  socket.on('game_dm', ({ toUserId, text }) => {
+    if (!text || !toUserId || text.length > 200) return;
+    if (_isSocketThrottled(socket.id)) return;
+    const payload = {
+      from:     userId,
+      fromName: socket.username,
+      to:       toUserId,
+      text:     text.trim(),
+      ts:       Date.now(),
+    };
+    const targetSid = userSockets.get(toUserId);
+    if (targetSid) io.to(targetSid).emit('game_dm', payload); // deliver to target
+    socket.emit('game_dm', payload);                          // echo to sender for history
   });
 
   // ── Emoji reaction ──
