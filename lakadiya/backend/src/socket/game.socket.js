@@ -502,15 +502,15 @@ function registerGameSocket(io, socket) {
       const payload = {
         id:          msg.id,
         sender_id:   msg.sender_id,
-        sender_name: socket.username,   // include sender name for recipient avatar
+        sender_name: socket.username,
         receiver_id: msg.receiver_id,
         text:        msg.text,
+        is_read:     false,
         created_at:  msg.created_at,
       };
 
-      // Real-time delivery to recipient's personal room
+      // Deliver to recipient only — sender's screen handles the message locally
       io.to(userRoom(toUserId)).emit('private_message', payload);
-      // NOTE: no echo to sender — DM screen already added the message optimistically
 
       // In-app notification record
       query(

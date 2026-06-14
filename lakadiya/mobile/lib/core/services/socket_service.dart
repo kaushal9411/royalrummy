@@ -40,6 +40,15 @@ class SocketService {
 
   void disconnect() => _socket?.disconnect();
 
+  /// Fully tears down the current socket and nulls the reference so that
+  /// the next [connect] call creates a fresh socket with the current token.
+  /// Must be called on logout BEFORE clearing storage.
+  void reset() {
+    _socket?.disconnect();
+    _socket?.destroy();
+    _socket = null;
+  }
+
   void emit(String event, [dynamic data]) => _socket?.emit(event, data);
 
   void on(String event, SocketCallback callback) =>

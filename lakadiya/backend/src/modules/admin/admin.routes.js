@@ -1,4 +1,5 @@
 const router = require('express').Router();
+const path   = require('path');
 const { authenticateAdmin, authenticateAdminFile } = require('../../middleware/auth.middleware');
 const { query } = require('../../config/database');
 const service = require('./admin.service');
@@ -10,6 +11,36 @@ const { setSelfExclusion, updateSettings: updateRgSettings } = require('../respo
 const { userSockets } = require('../../socket/game.socket');
 const { getIO } = require('../../socket/socket.manager');
 
+// ── KYC document file serving ─────────────────────────────────────────────────
+// MUST be registered BEFORE router.use(authenticateAdmin) because <img> tags
+// cannot send Authorization headers — authenticateAdminFile accepts ?token= instead.
+router.get('/kyc/:kycId/document/:docType', authenticateAdminFile, async (req, res, next) => {
+  try {
+    const { kycId, docType } = req.params;
+    if (!['pan_doc', 'selfie'].includes(docType))
+      return res.status(400).json({ message: 'Invalid doc type' });
+
+    const { rows } = await query(
+      'SELECT pan_doc_path, selfie_path FROM kyc_submissions WHERE id = $1',
+      [kycId]
+    );
+    if (!rows.length) return res.status(404).end();
+
+    const filePath = docType === 'pan_doc' ? rows[0].pan_doc_path : rows[0].selfie_path;
+    if (!filePath) return res.status(404).json({ message: 'Document not uploaded' });
+
+    // Ensure absolute path — multer stores absolute paths but guard for safety
+    const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(filePath);
+
+    // Derive MIME type from extension so browser renders inline
+    const ext  = path.extname(absPath).toLowerCase();
+    const mime = ext === '.pdf' ? 'application/pdf' : ext === '.png' ? 'image/png' : 'image/jpeg';
+    res.setHeader('Content-Type', mime);
+    res.sendFile(absPath);
+  } catch (e) { next(e); }
+});
+
+// All routes below this line require a valid admin JWT in the Authorization header
 router.use(authenticateAdmin);
 
 router.get('/dashboard', async (req, res, next) => {
@@ -104,26 +135,6 @@ router.post('/users/:userId/lift-exclusion', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// ── KYC document serving ─────────────────────────────────────────────────────
-// Uses ?token= so <img> tags can include the admin JWT without fetch()
-router.get('/kyc/:kycId/document/:docType', authenticateAdminFile, async (req, res, next) => {
-  try {
-    const { kycId, docType } = req.params;
-    if (!['pan_doc', 'selfie'].includes(docType))
-      return res.status(400).json({ message: 'Invalid doc type' });
-
-    const { rows } = await query(
-      'SELECT pan_doc_path, selfie_path FROM kyc_submissions WHERE id = $1',
-      [kycId]
-    );
-    if (!rows.length) return res.status(404).end();
-
-    const filePath = docType === 'pan_doc' ? rows[0].pan_doc_path : rows[0].selfie_path;
-    if (!filePath) return res.status(404).json({ message: 'Document not uploaded' });
-
-    res.sendFile(filePath);
-  } catch (e) { next(e); }
-});
 
 // ── KYC management ────────────────────────────────────────────────────────────
 router.get('/kyc/pending', async (req, res, next) => {

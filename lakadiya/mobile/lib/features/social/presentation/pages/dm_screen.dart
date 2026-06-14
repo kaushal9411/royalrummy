@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../../core/services/api_service.dart';
 import '../../../../core/services/socket_service.dart';
 import '../../../../core/services/storage_service.dart';
 import '../../../../core/theme/app_theme.dart';
@@ -49,7 +50,8 @@ class _DmScreenState extends State<DmScreen> {
   @override
   void initState() {
     super.initState();
-    _myId = StorageService.getUser()?['id'] as String?;
+    // Read from Hive first (sync, fast). If null, _resolveMyId() fetches from API.
+    _myId = StorageService.getUser()?['id']?.toString();
 
     _msgCb  = _onSocketMessage;
     _readCb = _onSocketRead;
@@ -58,7 +60,6 @@ class _DmScreenState extends State<DmScreen> {
 
     _scroll.addListener(_scrollListener);
 
-    // Scroll to bottom when keyboard opens
     _focus.addListener(() {
       if (_focus.hasFocus && _showEmoji) {
         setState(() => _showEmoji = false);
@@ -68,7 +69,27 @@ class _DmScreenState extends State<DmScreen> {
       }
     });
 
-    _load();
+    _resolveMyId().then((_) => _load());
+  }
+
+  // Ensures _myId is set before loading messages. Falls back to API /users/me
+  // if Hive returned null (can happen right after an account switch).
+  Future<void> _resolveMyId() async {
+    if (_myId != null) return;
+    try {
+      final res = await ApiService().get('/users/me');
+      final id = (res.data as Map?)?['id']?.toString();
+      if (id != null && mounted) {
+        _myId = id;
+        // Also persist so next open is instant
+        final stored = StorageService.getUser();
+        if (stored != null) {
+          await StorageService.saveUser({...stored, 'id': id});
+        }
+      }
+    } catch (_) {
+      // If API also fails, messages will still load but left/right may be wrong
+    }
   }
 
   @override
@@ -119,15 +140,20 @@ class _DmScreenState extends State<DmScreen> {
 
   void _onSocketMessage(dynamic data) {
     if (!mounted) return;
-    final msg = Map<String, dynamic>.from(data as Map);
-    final sid = msg['sender_id'] as String?;
-    final rid = msg['receiver_id'] as String?;
-    final id  = msg['id'];
+    final raw = Map<String, dynamic>.from(data as Map);
+    final sid = raw['sender_id'] as String?;
+    final rid = raw['receiver_id'] as String?;
+    final id  = raw['id'];
 
-    // Only messages incoming FROM the other user TO me in this conversation
+    // Only accept messages sent BY the other user TO me in this conversation
     if (sid != widget.userId || rid != _myId) return;
+
+    // Deduplicate — guard against duplicate events
     if (id != null && _seenIds.contains(id)) return;
     if (id != null) _seenIds.add(id);
+
+    // Guarantee is_read field is present
+    final msg = Map<String, dynamic>.from(raw)..putIfAbsent('is_read', () => false);
 
     setState(() => _messages.add(msg));
     _repo.markRead(widget.userId);

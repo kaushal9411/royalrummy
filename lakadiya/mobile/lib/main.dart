@@ -68,9 +68,13 @@ class _LakadiyaAppState extends State<LakadiyaApp> {
     _gameBloc = GameBloc();
     _paymentBloc = PaymentBloc(PaymentRepository(ApiService()), SocketService());
 
-    // After login: register FCM token and load encrypted credentials from backend
+    // After login: reconnect socket with the new user's token, register FCM token,
+    // and load encrypted credentials from backend.
+    // SocketService().connect() is a no-op if the socket is already alive,
+    // so this is safe to call on initial auth-check as well as after account switch.
     _authBloc.stream.listen((state) {
       if (state is AuthAuthenticated) {
+        SocketService().connect();
         _registerFcmToken();
         unawaited(CredentialsService.instance.load());
       }

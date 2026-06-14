@@ -1,44 +1,107 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import Cookies from 'js-cookie';
 import {
   getPendingKyc, approveKyc, rejectKyc, kycDocUrl,
   type KycSubmission,
 } from '../../lib/api';
 import { formatDate } from '../../lib/utils';
 
+function isPdfPath(docPath: string | null) {
+  return (docPath ?? '').toLowerCase().endsWith('.pdf');
+}
+
+// Fetches the document as a blob via Authorization header (runs only on the client).
+// Returns a local object URL safe to use in <img src> and <iframe src>.
+function useKycBlob(kycId: string, docType: 'pan_doc' | 'selfie') {
+  const [blobUrl, setBlobUrl]   = useState<string | null>(null);
+  const [status, setStatus]     = useState<'loading' | 'ok' | 'error'>('loading');
+  const prevBlob = useRef<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (prevBlob.current) {
+      URL.revokeObjectURL(prevBlob.current);
+      prevBlob.current = null;
+    }
+    setBlobUrl(null);
+    setStatus('loading');
+
+    const token  = Cookies.get('admin_token') ?? '';
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
+
+    fetch(`${apiUrl}/admin/kyc/${kycId}/document/${docType}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then(r => (r.ok ? r.blob() : Promise.reject(r.status)))
+      .then(blob => {
+        if (cancelled) return;
+        const url = URL.createObjectURL(blob);
+        prevBlob.current = url;
+        setBlobUrl(url);
+        setStatus('ok');
+      })
+      .catch(() => { if (!cancelled) setStatus('error'); });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [kycId, docType]);
+
+  // Revoke on unmount
+  useEffect(() => () => { if (prevBlob.current) URL.revokeObjectURL(prevBlob.current); }, []);
+
+  return { blobUrl, status };
+}
+
 // ── Document lightbox ─────────────────────────────────────────────────────────
 function DocViewer({
-  kycId, docType, label, onClose,
+  kycId, docType, docPath, label, onClose,
 }: {
   kycId: string;
   docType: 'pan_doc' | 'selfie';
+  docPath: string | null;
   label: string;
   onClose: () => void;
 }) {
-  const url = kycDocUrl(kycId, docType);
-  const isPdf = false; // multer saves .jpg/.png so always image in practice
+  const directUrl = kycDocUrl(kycId, docType);
+  const isPdf     = isPdfPath(docPath);
+  const { blobUrl, status } = useKycBlob(kycId, docType);
 
   return (
     <div
       className="fixed inset-0 z-50 flex flex-col items-center justify-center"
       style={{ background: 'rgba(0,0,0,0.92)', backdropFilter: 'blur(8px)' }}
+      onClick={onClose}
     >
       {/* Header */}
-      <div className="w-full max-w-3xl flex items-center justify-between px-4 py-3 mb-3">
+      <div
+        className="w-full max-w-4xl flex items-center justify-between px-4 py-3 mb-3"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center gap-2">
           <span className="text-white font-semibold text-sm">{label}</span>
           <span className="text-gray-500 text-xs font-mono">{kycId.slice(0, 8)}…</span>
         </div>
         <div className="flex items-center gap-2">
           <a
-            href={url}
+            href={directUrl}
+            download
+            className="px-3 py-1.5 rounded-lg border border-dark-border text-gray-300 text-xs
+                       hover:border-primary/40 hover:text-primary-light transition-all"
+          >
+            ⬇ Download
+          </a>
+          <a
+            href={directUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="px-3 py-1.5 rounded-lg border border-dark-border text-gray-300 text-xs
                        hover:border-primary/40 hover:text-primary-light transition-all"
           >
-            ↗ Open Full Size
+            ↗ Full Size
           </a>
           <button
             onClick={onClose}
@@ -49,21 +112,48 @@ function DocViewer({
         </div>
       </div>
 
-      {/* Image */}
-      <div className="w-full max-w-3xl flex-1 overflow-auto flex items-center justify-center px-4 pb-8">
-        {isPdf ? (
-          <iframe src={url} className="w-full h-full rounded-xl" title={label} />
-        ) : (
-          /* eslint-disable-next-line @next/next/no-img-element */
-          <img
-            src={url}
-            alt={label}
-            className="max-w-full max-h-[75vh] rounded-xl border border-white/10 object-contain"
-            onError={(e) => {
-              (e.target as HTMLImageElement).src = '';
-              (e.target as HTMLImageElement).alt = 'Failed to load document';
-            }}
-          />
+      {/* Document area */}
+      <div
+        className="w-full max-w-4xl flex-1 overflow-auto flex items-center justify-center px-4 pb-8"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {status === 'loading' && (
+          <div className="w-10 h-10 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+        )}
+
+        {status === 'error' && (
+          <div className="flex flex-col items-center gap-4 text-center">
+            <span className="text-5xl">🚫</span>
+            <p className="text-white font-semibold">Failed to load document</p>
+            <p className="text-gray-400 text-sm">The file may have moved or the session expired.</p>
+            <a
+              href={directUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-4 py-2 rounded-lg border border-primary/40 text-primary-light text-sm hover:bg-primary/10 transition-colors"
+            >
+              Try opening directly ↗
+            </a>
+          </div>
+        )}
+
+        {status === 'ok' && blobUrl && (
+          isPdf ? (
+            <iframe
+              src={blobUrl}
+              className="w-full rounded-xl border border-white/10"
+              style={{ height: '75vh' }}
+              title={label}
+            />
+          ) : (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img
+              src={blobUrl}
+              alt={label}
+              className="max-w-full rounded-xl border border-white/10 object-contain"
+              style={{ maxHeight: '75vh' }}
+            />
+          )
         )}
       </div>
     </div>
@@ -72,31 +162,55 @@ function DocViewer({
 
 // ── Thumb preview ─────────────────────────────────────────────────────────────
 function DocThumb({
-  kycId, docType, label, onClick,
+  kycId, docType, docPath, label, onClick,
 }: {
-  kycId: string; docType: 'pan_doc' | 'selfie'; label: string; onClick: () => void;
+  kycId: string; docType: 'pan_doc' | 'selfie'; docPath: string | null; label: string; onClick: () => void;
 }) {
-  const url = kycDocUrl(kycId, docType);
+  const isPdf = isPdfPath(docPath);
+  const { blobUrl, status } = useKycBlob(kycId, docType);
+
   return (
-    <button
-      onClick={onClick}
-      className="flex flex-col items-center gap-1.5 group"
-    >
+    <button onClick={onClick} className="flex flex-col items-center gap-1.5 group">
       <div
         className="w-24 h-20 rounded-xl overflow-hidden border-2 border-dark-border
-                   group-hover:border-primary/50 transition-colors relative"
+                   group-hover:border-primary/50 transition-colors relative flex items-center justify-center"
         style={{ background: '#0B0F1A' }}
       >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={url}
-          alt={label}
-          className="w-full h-full object-cover"
-          onError={(e) => { (e.currentTarget.parentElement!).classList.add('doc-error'); }}
-        />
-        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
-          <span className="opacity-0 group-hover:opacity-100 text-white text-lg transition-opacity">🔍</span>
-        </div>
+        {/* Loading skeleton */}
+        {status === 'loading' && (
+          <div className="absolute inset-0 bg-dark-card animate-pulse rounded-xl" />
+        )}
+
+        {/* PDF placeholder */}
+        {status === 'ok' && isPdf && (
+          <div className="flex flex-col items-center gap-1 text-gray-500">
+            <span className="text-2xl">📄</span>
+            <span className="text-[10px]">PDF</span>
+          </div>
+        )}
+
+        {status === 'error' && (
+          <div className="flex flex-col items-center gap-1 text-gray-600">
+            <span className="text-xl">🚫</span>
+            <span className="text-[10px]">Error</span>
+          </div>
+        )}
+
+        {status === 'ok' && !isPdf && blobUrl && (
+          /* eslint-disable-next-line @next/next/no-img-element */
+          <img
+            src={blobUrl}
+            alt={label}
+            className="w-full h-full object-cover"
+          />
+        )}
+
+        {/* Hover overlay */}
+        {status === 'ok' && (
+          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center">
+            <span className="opacity-0 group-hover:opacity-100 text-white text-xl transition-opacity">🔍</span>
+          </div>
+        )}
       </div>
       <span className="text-gray-500 text-xs">{label}</span>
     </button>
@@ -112,7 +226,7 @@ export default function KycPage() {
   const [toast,       setToast]           = useState<{ msg: string; ok: boolean } | null>(null);
   const [rejectTarget, setRejectTarget]   = useState<KycSubmission | null>(null);
   const [rejectRemark, setRejectRemark]   = useState('');
-  const [viewer, setViewer]               = useState<{ kycId: string; docType: 'pan_doc' | 'selfie'; label: string } | null>(null);
+  const [viewer, setViewer]               = useState<{ kycId: string; docType: 'pan_doc' | 'selfie'; docPath: string | null; label: string } | null>(null);
 
   const showToast = (msg: string, ok = true) => {
     setToast({ msg, ok });
@@ -162,6 +276,7 @@ export default function KycPage() {
         <DocViewer
           kycId={viewer.kycId}
           docType={viewer.docType}
+          docPath={viewer.docPath}
           label={viewer.label}
           onClose={() => setViewer(null)}
         />
@@ -286,8 +401,9 @@ export default function KycPage() {
                       <DocThumb
                         kycId={kyc.id}
                         docType="pan_doc"
+                        docPath={kyc.pan_doc_path}
                         label="PAN Card"
-                        onClick={() => setViewer({ kycId: kyc.id, docType: 'pan_doc', label: `PAN Card — ${kyc.username}` })}
+                        onClick={() => setViewer({ kycId: kyc.id, docType: 'pan_doc', docPath: kyc.pan_doc_path, label: `PAN Card — ${kyc.username}` })}
                       />
                     ) : (
                       <div className="w-24 h-20 rounded-xl border-2 border-dashed border-dark-border flex items-center justify-center">
@@ -298,8 +414,9 @@ export default function KycPage() {
                       <DocThumb
                         kycId={kyc.id}
                         docType="selfie"
+                        docPath={kyc.selfie_path}
                         label="Selfie"
-                        onClick={() => setViewer({ kycId: kyc.id, docType: 'selfie', label: `Selfie — ${kyc.username}` })}
+                        onClick={() => setViewer({ kycId: kyc.id, docType: 'selfie', docPath: kyc.selfie_path, label: `Selfie — ${kyc.username}` })}
                       />
                     ) : (
                       <div className="w-24 h-20 rounded-xl border-2 border-dashed border-dark-border flex items-center justify-center">

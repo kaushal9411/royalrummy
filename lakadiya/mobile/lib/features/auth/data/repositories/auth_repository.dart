@@ -1,5 +1,6 @@
 import '../../../../core/services/api_service.dart';
 import '../../../../core/services/fcm_service.dart';
+import '../../../../core/services/socket_service.dart';
 import '../../../../core/services/storage_service.dart';
 import '../../domain/entities/user_entity.dart';
 
@@ -47,7 +48,10 @@ class AuthRepository {
     return _saveAndReturn(res.data);
   }
 
-  Future<void> logout() async => StorageService.clear();
+  Future<void> logout() async {
+    SocketService().reset(); // disconnect before clearing token so server cleans up
+    await StorageService.clear();
+  }
 
   UserEntity? getCachedUser() {
     final data = StorageService.getUser();

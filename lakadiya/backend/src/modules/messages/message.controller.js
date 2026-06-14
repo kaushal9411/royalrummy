@@ -21,16 +21,18 @@ const sendMessage = async (req, res, next) => {
     
     const msg = await service.sendMessage(req.user.id, userId, text);
     
-    // Emit socket event to recipient for real-time delivery
+    // Deliver to recipient in real-time. Sender's own screen already shows the
+    // message via optimistic update so no echo back to sender is needed or wanted.
     try {
       const io = getIO();
       io.to(`user:${userId}`).emit('private_message', {
-        id: msg.id,
-        sender_id: msg.sender_id,
+        id:          msg.id,
+        sender_id:   msg.sender_id,
         sender_name: req.user.username,
         receiver_id: msg.receiver_id,
-        text: msg.text,
-        created_at: msg.created_at,
+        text:        msg.text,
+        is_read:     false,
+        created_at:  msg.created_at,
       });
     } catch (socketErr) {
       console.log('Socket emit error:', socketErr.message);
