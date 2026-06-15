@@ -43,7 +43,10 @@ class _MyRoomsPageState extends State<MyRoomsPage> {
   void _rejoin(Map<String, dynamic> room) {
     final roomId = room['id'] as String;
     context.read<GameBloc>().add(GameJoinRoom(roomId, 0));
-    context.go('/room/$roomId');
+    // A game in progress goes straight to the table (state is restored via
+    // game_state_sync); a still-open room goes to the waiting screen.
+    final dest = room['status'] == 'playing' ? '/game/$roomId' : '/room/$roomId';
+    context.go(dest);
   }
 
   @override
@@ -194,6 +197,7 @@ class _ActiveRoomCard extends StatelessWidget {
         (num.tryParse(room['bet_amount']?.toString() ?? '') ?? 0).toDouble();
     final code = room['code'] as String? ?? '';
     final hostName = room['host_name'] as String? ?? 'Room';
+    final isPlaying = room['status'] == 'playing';
 
     final accentColor = isPrivate ? AppColors.trump : AppColors.accent;
 
@@ -280,6 +284,29 @@ class _ActiveRoomCard extends StatelessWidget {
                                     fontSize: 9,
                                     fontWeight: FontWeight.bold,
                                     letterSpacing: 1)),
+                          ),
+                        ],
+                        if (isPlaying) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 7, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: AppColors.primary.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                  color: AppColors.primary.withValues(alpha: 0.4)),
+                            ),
+                            child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                              Icon(Icons.circle, color: AppColors.primary, size: 7),
+                              SizedBox(width: 4),
+                              Text('LIVE',
+                                  style: TextStyle(
+                                      color: AppColors.primary,
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.bold,
+                                      letterSpacing: 1)),
+                            ]),
                           ),
                         ],
                       ]),
@@ -408,9 +435,9 @@ class _ActiveRoomCard extends StatelessWidget {
                             offset: const Offset(0, 3)),
                       ],
                     ),
-                    child: const Text(
-                      'Rejoin',
-                      style: TextStyle(
+                    child: Text(
+                      isPlaying ? 'Resume' : 'Rejoin',
+                      style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.bold,
                           fontSize: 14),

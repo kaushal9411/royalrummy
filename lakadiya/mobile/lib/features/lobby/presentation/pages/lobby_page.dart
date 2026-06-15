@@ -192,8 +192,11 @@ class _LobbyPageState extends State<LobbyPage> with TickerProviderStateMixin {
     try {
       final room = await _repo.joinRoom(code);
       if (mounted) {
-        context.read<GameBloc>().add(GameJoinRoom(room['id'] as String, 0));
-        context.go('/room/${room['id']}');
+        final roomId = room['id'] as String;
+        context.read<GameBloc>().add(GameJoinRoom(roomId, 0));
+        // Rejoining a game already in progress → straight to the table.
+        final dest = room['status'] == 'playing' ? '/game/$roomId' : '/room/$roomId';
+        context.go(dest);
       }
     } catch (e) {
       _showError(e.toString());

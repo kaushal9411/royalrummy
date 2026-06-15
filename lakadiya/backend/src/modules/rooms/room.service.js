@@ -97,6 +97,24 @@ const joinRoom = async (userId, code) => {
   if (!roomResult.rows.length) throw { status: 404, message: 'Room not found' };
 
   const room = roomResult.rows[0];
+
+  const players = await query(
+    'SELECT seat, user_id FROM room_players WHERE room_id = $1',
+    [room.id]
+  );
+
+  // Existing member rejoining (after a disconnect, app close, or just navigating
+  // away) — ALWAYS allowed, even mid-game. They're still in room_players, so no
+  // bet re-charge and no status / full-room checks apply to them.
+  const alreadyIn = players.rows.find((p) => p.user_id === userId);
+  if (alreadyIn) {
+    if (room.status === 'finished') {
+      throw { status: 400, message: 'This game has already ended' };
+    }
+    return getRoomDetails(room.id);
+  }
+
+  // ── New joiner from here on ──
   if (room.status !== 'waiting') throw { status: 400, message: 'Room not accepting players' };
 
   // Responsible gaming + wallet check for paid rooms
@@ -106,16 +124,6 @@ const joinRoom = async (userId, code) => {
     const balance = await _getUserBalance(userId);
     if (balance < betAmount) throw { status: 400, message: `Insufficient balance. You need ₹${betAmount} to join this room` };
   }
-
-  const players = await query(
-    'SELECT seat, user_id FROM room_players WHERE room_id = $1',
-    [room.id]
-  );
-
-  // alreadyIn MUST come before the full-room check: a player who navigated away
-  // without calling leaveRoom is still in room_players and should rejoin freely.
-  const alreadyIn = players.rows.find((p) => p.user_id === userId);
-  if (alreadyIn) return getRoomDetails(room.id);
 
   if (players.rows.length >= 4) throw { status: 400, message: 'Room is full' };
 
@@ -221,7 +229,7 @@ const getMyActiveRooms = async (userId) => {
      JOIN users u ON u.id = r.host_id
      LEFT JOIN room_players rp ON rp.room_id = r.id AND rp.user_id = $1
      LEFT JOIN room_players rp2 ON rp2.room_id = r.id
-     WHERE r.status = 'waiting'
+     WHERE r.status IN ('waiting', 'playing')
        AND (rp.room_id IS NOT NULL OR r.host_id = $1)
      GROUP BY r.id, r.code, r.status, r.is_private, r.bet_amount, r.host_id, u.username, u.avatar_url
      ORDER BY r.created_at DESC

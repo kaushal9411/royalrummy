@@ -91,7 +91,12 @@ class _RoomPageState extends State<RoomPage> with TickerProviderStateMixin {
   Future<void> _loadRoom() async {
     try {
       final room = await _repo.getRoomDetails(widget.roomId);
-      if (mounted) setState(() => _room = room);
+      if (!mounted) return;
+      if (room['status'] == 'playing') {
+        _goToGame();
+        return;
+      }
+      setState(() => _room = room);
     } catch (_) {}
   }
 
