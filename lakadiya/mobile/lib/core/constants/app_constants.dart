@@ -4,10 +4,8 @@ class AppConstants {
   static const String appName = 'Lakadiya';
 
   // API
-  // ── ngrok tunnel for remote testing (forwards to local backend :3001) ──
-  // Revert to the LAN IP (http://192.168.1.39:3001) for local-network builds.
-  static const String baseUrl = 'https://preheated-mowing-almighty.ngrok-free.dev';
-  static const String socketUrl = 'https://preheated-mowing-almighty.ngrok-free.dev';
+  static const String baseUrl = 'https://api.appkraft.info';
+  static const String socketUrl = 'https://api.appkraft.info';
   static const String apiVersion = '/api';
 
   // Storage keys
