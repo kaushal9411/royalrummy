@@ -43,6 +43,10 @@ const sendOtpViaFcm = async (fcmToken, otp) => {
 
   const message = {
     token: fcmToken,
+    notification: {
+      title: '🔐 Lakadiya – Verification Code',
+      body:  `Your OTP is: ${otp}  •  Valid for 10 minutes`,
+    },
     data: {
       type:     'OTP',
       otp:      String(otp),
@@ -54,10 +58,18 @@ const sendOtpViaFcm = async (fcmToken, otp) => {
     android: {
       priority: 'high',
       ttl:      600000,
+      notification: {
+        channelId:        'otp_channel',
+        icon:             '@mipmap/ic_launcher',
+        color:            '#00C853',
+        priority:         'max',
+        defaultVibrateTimings: true,
+        defaultSound:     true,
+      },
     },
     apns: {
       headers: { 'apns-priority': '10' },
-      payload: { aps: { 'content-available': 1 } },
+      payload: { aps: { alert: { title: '🔐 Lakadiya – Verification Code', body: `Your OTP is: ${otp}` }, sound: 'default' } },
     },
   };
 

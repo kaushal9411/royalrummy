@@ -7,8 +7,9 @@ import 'app_settings_service.dart';
 // ── Top-level background handler (must be top-level, not a class method) ──────
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  // FCM auto-displays messages that have a `notification` key — no code needed.
-  // For data-only messages (no `notification` key) we must show the notification ourselves.
+  // OTP messages now include a `notification` key — FCM shows the banner natively.
+  // For all other notification messages, nothing extra is needed.
+  // Only handle data-only messages (no notification key) ourselves.
   if (message.notification != null) return;
 
   final data  = message.data;
