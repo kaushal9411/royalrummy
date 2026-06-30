@@ -4,6 +4,7 @@ const { query } = require('../../config/database');
 const logger = require('../../config/logger');
 const { sendOtp, verifyOtp } = require('./otp.service');
 const { getSettings } = require('../admin/settings.service');
+const { storeDeviceToken } = require('../notifications/notification.service');
 
 // Ensure mobile column exists
 query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS mobile VARCHAR(15) UNIQUE`).catch(() => {});
@@ -41,7 +42,7 @@ const requestOtp = async ({ mobile, fcmToken }) => {
 };
 
 // ─── OTP: verify → login OR auto-register ─────────────────────────────────────
-const verifyAndLogin = async ({ mobile, otp }) => {
+const verifyAndLogin = async ({ mobile, otp, fcmToken }) => {
   const settings = await getSettings();
   if (settings.maintenance_mode)
     throw { status: 503, message: 'Platform is under maintenance. Please try again later.' };
@@ -109,6 +110,14 @@ const verifyAndLogin = async ({ mobile, otp }) => {
   }
 
   const { is_banned, ...safeUser } = user;
+
+  // Store FCM token so broadcast notifications reach this device
+  if (fcmToken) {
+    storeDeviceToken(user.id, fcmToken).catch((e) =>
+      logger.warn('[Auth] FCM token store failed:', e.message)
+    );
+  }
+
   return {
     token: generateToken(user.id, user.username, user.is_admin),
     user: safeUser,

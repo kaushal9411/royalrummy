@@ -13,6 +13,7 @@ router.post('/otp/send', otpSendLimiter, [
 router.post('/otp/verify', authLimiter, [
   body('mobile').isMobilePhone(),
   body('otp').isLength({ min: 6, max: 6 }).isNumeric(),
+  body('fcmToken').optional().isString(),
 ], controller.verifyAndLogin);
 
 // Guest login

@@ -21,9 +21,11 @@ class AuthRepository {
     required String mobile,
     required String otp,
   }) async {
+    final fcmToken = FcmService.instance.token ?? await FcmService.instance.refreshToken();
     final res = await _api.post('/auth/otp/verify', data: {
       'mobile': mobile,
       'otp':    otp,
+      if (fcmToken != null) 'fcmToken': fcmToken,
     });
     return _saveAndReturn(res.data);
   }
