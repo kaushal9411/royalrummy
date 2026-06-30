@@ -21,7 +21,7 @@ const { autoSeedFromEnv } = require('./modules/credentials/credentials.service')
 const { errorHandler, notFound } = require('./middleware/error.middleware');
 
 const app = express();
-
+app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false })); // CSP disabled for served HTML legal pages
 app.use(cors({
   origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',

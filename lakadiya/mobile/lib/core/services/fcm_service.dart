@@ -80,6 +80,15 @@ class FcmService {
   String? _token;
   String? get token => _token;
 
+  Future<String?> refreshToken() async {
+    try {
+      _token ??= await FirebaseMessaging.instance.getToken();
+      return _token;
+    } catch (_) {
+      return null;
+    }
+  }
+
   final _otpController = StreamController<String>.broadcast();
   Stream<String> get otpStream => _otpController.stream;
 

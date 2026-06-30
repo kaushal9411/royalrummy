@@ -65,7 +65,12 @@ const sendOtp = async (mobile, fcmToken) => {
         logger.warn(`[OTP DEV] ${mobile} → ${code}  (Fast2SMS & Firebase not configured)`);
       } else {
         logger.error('[OTP] FCM failed:', err.message);
-        throw { status: 503, message: err.message || 'Failed to deliver OTP.' };
+        // 400-type errors (missing token) are client issues; 5xx are server issues
+        const status = (err.status && err.status < 500) ? err.status : 503;
+        const message = !fcmToken
+          ? 'Please enable notifications on your device to receive OTP, then try again.'
+          : (err.message || 'Failed to deliver OTP.');
+        throw { status, message };
       }
     }
   }

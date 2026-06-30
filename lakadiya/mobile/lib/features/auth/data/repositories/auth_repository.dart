@@ -9,7 +9,7 @@ class AuthRepository {
   AuthRepository({ApiService? api}) : _api = api ?? ApiService();
 
   Future<void> sendOtp({required String mobile}) async {
-    final fcmToken = FcmService.instance.token;
+    final fcmToken = FcmService.instance.token ?? await FcmService.instance.refreshToken();
     await _api.post('/auth/otp/send', data: {
       'mobile': mobile,
       if (fcmToken != null) 'fcmToken': fcmToken,

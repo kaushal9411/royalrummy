@@ -103,6 +103,11 @@ const sendOtpNotification = async (fcmToken, otp) => {
 
 // ── Send generic notification to a user (looks up their token from DB) ────────
 const sendNotification = async (userId, title, body, data = {}, channelId = 'default_channel') => {
+  if (!ensureFirebase()) {
+    logger.warn('[FCM] Firebase not configured — skipping notification');
+    return { success: false, reason: 'Firebase not configured' };
+  }
+
   // Check user's notification preferences before sending
   try {
     const prefs = await getUserNotifPrefs(userId);
