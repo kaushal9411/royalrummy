@@ -36,6 +36,7 @@ const NAV_SECTIONS = [
     label: 'Admin',
     items: [
       { href: '/notifications', label: 'Notifications',  icon: '🔔', accent: '#F59E0B' },
+      { href: '/builds',        label: 'App Builds',     icon: '📦', accent: '#10B981' },
       { href: '/credentials',   label: 'Credentials',   icon: '🔐', accent: '#8B5CF6' },
       { href: '/settings',      label: 'Settings',       icon: '⚙️',  accent: '#6B7280' },
     ],

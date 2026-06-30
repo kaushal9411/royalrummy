@@ -1,8 +1,52 @@
-const router = require('express').Router();
-const path   = require('path');
+const router  = require('express').Router();
+const path    = require('path');
+const fs      = require('fs');
+const multer  = require('multer');
 const { authenticateAdmin, authenticateAdminFile } = require('../../middleware/auth.middleware');
 const { query } = require('../../config/database');
 const service = require('./admin.service');
+
+// ── APK builds upload storage ─────────────────────────────────────────────────
+const BUILDS_DIR = path.join(__dirname, '../../../../uploads/builds');
+fs.mkdirSync(BUILDS_DIR, { recursive: true });
+
+const buildsStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, BUILDS_DIR),
+  filename:    (_req, file, cb) => {
+    const ts   = Date.now();
+    const safe = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    cb(null, `${ts}_${safe}`);
+  },
+});
+const uploadApk = multer({
+  storage: buildsStorage,
+  limits:  { fileSize: 200 * 1024 * 1024 }, // 200 MB
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype === 'application/vnd.android.package-archive' ||
+        file.originalname.endsWith('.apk') ||
+        file.originalname.endsWith('.aab')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only .apk or .aab files are allowed'));
+    }
+  },
+});
+
+// Ensure builds table exists
+query(`
+  CREATE TABLE IF NOT EXISTS app_builds (
+    id          SERIAL PRIMARY KEY,
+    version     VARCHAR(50)  NOT NULL,
+    build_num   INTEGER      NOT NULL DEFAULT 0,
+    platform    VARCHAR(20)  NOT NULL DEFAULT 'android',
+    filename    TEXT         NOT NULL,
+    filepath    TEXT         NOT NULL,
+    filesize    BIGINT       NOT NULL DEFAULT 0,
+    notes       TEXT,
+    uploaded_by TEXT,
+    created_at  TIMESTAMPTZ  DEFAULT NOW()
+  )
+`).catch(() => {});
 const { sendAdminBroadcast, getBroadcastHistory } = require('../notifications/notification.service');
 const { getSettings, updateSettings } = require('./settings.service');
 const { listCredentials, setCredential, deleteCredential } = require('../credentials/credentials.service');
@@ -40,11 +84,56 @@ router.get('/kyc/:kycId/document/:docType', authenticateAdminFile, async (req, r
   } catch (e) { next(e); }
 });
 
+// ── APK build download (uses ?token= so <a download> works without custom headers) ─
+router.get('/builds/:id/download', authenticateAdminFile, async (req, res, next) => {
+  try {
+    const { rows } = await query('SELECT * FROM app_builds WHERE id = $1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ message: 'Build not found' });
+    const build = rows[0];
+    if (!fs.existsSync(build.filepath)) return res.status(404).json({ message: 'File not found on server' });
+    res.download(build.filepath, `lakadiya-v${build.version}-${build.build_num}.apk`);
+  } catch (e) { next(e); }
+});
+
 // All routes below this line require a valid admin JWT in the Authorization header
 router.use(authenticateAdmin);
 
 router.get('/dashboard', async (req, res, next) => {
   try { res.json(await service.getDashboardStats()); } catch (e) { next(e); }
+});
+
+// ── App Builds ────────────────────────────────────────────────────────────────
+router.get('/builds', async (req, res, next) => {
+  try {
+    const { rows } = await query(
+      `SELECT id, version, build_num, platform, filename, filesize, notes, uploaded_by, created_at
+       FROM app_builds ORDER BY created_at DESC`
+    );
+    res.json(rows);
+  } catch (e) { next(e); }
+});
+
+router.post('/builds/upload', uploadApk.single('apk'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
+    const { version = '1.0.0', build_num = 0, notes = '', platform = 'android' } = req.body;
+    const { rows } = await query(
+      `INSERT INTO app_builds (version, build_num, platform, filename, filepath, filesize, notes, uploaded_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [version, parseInt(build_num), platform, req.file.originalname, req.file.path, req.file.size, notes, req.admin?.username || 'admin']
+    );
+    res.json({ success: true, build: rows[0] });
+  } catch (e) { next(e); }
+});
+
+router.delete('/builds/:id', async (req, res, next) => {
+  try {
+    const { rows } = await query('SELECT * FROM app_builds WHERE id = $1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ message: 'Build not found' });
+    if (fs.existsSync(rows[0].filepath)) fs.unlinkSync(rows[0].filepath);
+    await query('DELETE FROM app_builds WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (e) { next(e); }
 });
 
 router.get('/users', async (req, res, next) => {
