@@ -17,3 +17,8 @@ desktop.ini
 # Logs
 *.log
 logs/
+
+# testing-deploy scripts generate these locally — never commit
+infrastructure/testing-deploy/config.env
+infrastructure/testing-deploy/credentials.txt
+infrastructure/testing-deploy/*.pem
